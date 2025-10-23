@@ -8,6 +8,8 @@ on:
 jobs:
   deploy-nisaa-poetry:
     runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.DEV_OPENAI_API_KEY }}
 
     steps:
       # Step 1: Checkout code
@@ -34,6 +36,9 @@ jobs:
           script: |
             cd /home/${{ secrets.SERVER_USER }}/nisaa_poetry
 
+            sed -i "s|ENV_OPENAI_API_KEY|${{ vars.DEV_OPENAI_API_KEY }}|g" .env
+            cat .env
+
             # Generate dynamic image tag (timestamp + run number)
             IMAGE_TAG=$(date +%Y%m%d%H%M%S)-${{ github.run_number }}
 
@@ -47,7 +52,7 @@ jobs:
             docker build -t nisaa_poetry:${IMAGE_TAG} .
 
             # Run new container on port 4011
-            docker run -d --name nisaa_poetry -p 4011:4011 nisaa_poetry:${IMAGE_TAG}
+            docker run -d --name nisaa_poetry -p 4011:4011 --env-file .env nisaa_poetry:${IMAGE_TAG}
 
             # Cleanup unused old images
             docker image prune -af
