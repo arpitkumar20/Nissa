@@ -7,7 +7,9 @@ import uvicorn
 from datetime import datetime
 from typing import Dict, Any
 from fastapi import FastAPI, APIRouter
+from fastapi.middleware.cors import CORSMiddleware
 
+from src.nisaa.api import chatbot_router
 from src.nisaa.api.extract_router import router as extract_router
 
 
@@ -24,6 +26,15 @@ health_router = APIRouter(
     prefix="/health",
     tags=["health"]
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # allow your frontend or all origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(chatbot_router.router)
 
 
 @health_router.get("/")

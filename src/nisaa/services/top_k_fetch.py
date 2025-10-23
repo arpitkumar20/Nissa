@@ -1,0 +1,74 @@
+import os
+import numpy as np
+from typing import List, Dict, Optional
+from sklearn.preprocessing import normalize
+from sklearn.metrics.pairwise import cosine_similarity
+from src.nisaa.helpers.logger import logger
+from dotenv import load_dotenv
+from pinecone import Pinecone
+
+# from src.nisaa.services.pinecone_client import pinecone_index
+
+load_dotenv()
+
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX = os.getenv("PINECONE_INDEX")
+PINECONE_ENV = os.getenv("PINECONE_ENV")
+
+
+# Create Pinecone client
+pinecone_client = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENV)
+pinecone_index = pinecone_client.Index(PINECONE_INDEX)
+
+
+
+def clean_text(text: str) -> str:
+    return text.strip()
+
+def query_pinecone_topk(
+    query_vector: List[float],
+    top_k: int = 5,
+    namespace: Optional[str] = "INDOUS",
+    similarity_threshold: float = 0.3
+) -> List[Dict]:
+
+    logger.info(f"Querying Pinecone index with top_k={top_k}, namespace={namespace}...")
+
+    query_vec_np = np.array(query_vector, dtype=np.float32).reshape(1, -1)
+    query_vec_np = normalize(query_vec_np, axis=1)
+
+    response = pinecone_index.query(
+        vector=query_vector,
+        top_k=top_k,
+        namespace="INDOUS",
+        include_metadata=True,
+        include_values=True
+    )
+
+    matches = response.get("matches", [])
+    results = []
+
+    for match in matches:
+        match_values = match.get("values")
+        if not match_values:
+            continue
+
+        match_vec_np = np.array(match_values, dtype=np.float32).reshape(1, -1)
+        match_vec_np = normalize(match_vec_np, axis=1)
+
+        similarity = float(cosine_similarity(query_vec_np, match_vec_np)[0][0])
+        if similarity < similarity_threshold:
+            continue
+
+        metadata = match.get("metadata", {})
+        cleaned_metadata = {k: clean_text(str(v)) for k, v in metadata.items()}
+
+        results.append({
+            "id": clean_text(match.get("id", "")),
+            "score": similarity,
+            **cleaned_metadata
+        })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    logger.info(f"✅ Found {len(results)} matches above threshold {similarity_threshold}")
+    return results
