@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+*.pyo
+
+# Virtual environment
+venv/
+.venv/
+.env.local
+
+# VSCode or other IDE settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temp files
+*.log
+*.tmp
+*.bak
+
+# Jupyter Notebooks checkpoint
+.ipynb_checkpoints/
+
+# Compiled C extensions
+*.c
+
+# Test reports
+htmlcov/
+coverage.xml
+*.cover
+*.py,cover
+.cache
+
+# Distribution files
+dist/
+build/
+*.tar.gz
+*.whl
