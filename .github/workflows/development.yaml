@@ -6,7 +6,7 @@ on:
       - main  # Trigger on push to main branch
 
 jobs:
-  deploy-nisaa-admin-backend:
+  deploy-nisaa-poetry:
     runs-on: ubuntu-latest
 
     steps:
