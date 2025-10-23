@@ -1,0 +1,55 @@
+name: Poetry Docker Deployment
+
+on:
+  push:
+    branches:
+      - main  # Trigger on push to main branch
+
+jobs:
+  deploy-nisaa-admin-backend:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      # Step 2: Copy project to EC2
+      - name: Copy project files to EC2
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "."
+          target: "/home/${{ secrets.SERVER_USER }}/nisaa_poetry"
+
+      # Step 3: Build and run Docker container on EC2
+      - name: Build and run Docker container on EC2
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd /home/${{ secrets.SERVER_USER }}/nisaa_poetry
+
+            # Generate dynamic image tag (timestamp + run number)
+            IMAGE_TAG=$(date +%Y%m%d%H%M%S)-${{ github.run_number }}
+
+            echo "🚀 Building image: nisaa_poetry:${IMAGE_TAG}"
+
+            # Stop and remove old container
+            docker stop nisaa_poetry || true
+            docker rm nisaa_poetry || true
+
+            # Build new Docker image with dynamic tag
+            docker build -t nisaa_poetry:${IMAGE_TAG} .
+
+            # Run new container on port 4011
+            docker run -d --name nisaa_poetry -p 4011:4011 nisaa_poetry:${IMAGE_TAG}
+
+            # Cleanup unused old images
+            docker image prune -af
+
+            echo "✅ Deployment complete with image tag: ${IMAGE_TAG}"
