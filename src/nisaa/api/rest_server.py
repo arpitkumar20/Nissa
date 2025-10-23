@@ -3,10 +3,13 @@ REST Server for Nisaa API
 Provides health check and other API endpoints
 """
 
-from fastapi import FastAPI, APIRouter
+import uvicorn
 from datetime import datetime
 from typing import Dict, Any
-import uvicorn
+from fastapi import FastAPI, APIRouter
+
+from src.nisaa.api.extract_router import router as extract_router
+
 
 
 # Create the main FastAPI application
@@ -63,7 +66,7 @@ async def detailed_health_check() -> Dict[str, Any]:
 
 
 app.include_router(health_router)
-
+app.include_router(extract_router)
 
 @app.get("/")
 async def root() -> Dict[str, str]:
