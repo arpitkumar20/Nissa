@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.nisaa.api import chatbot_router
 from src.nisaa.api.extract_router import router as extract_router
+from src.nisaa.api.wati_router import router as wati_router
 
 
 app = FastAPI(
@@ -58,6 +59,8 @@ async def detailed_health_check() -> Dict[str, Any]:
 
 app.include_router(health_router)
 app.include_router(extract_router)
+app.include_router(wati_router)
+
 
 @app.get("/")
 async def root() -> Dict[str, str]:
