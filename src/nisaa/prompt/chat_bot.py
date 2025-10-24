@@ -19,11 +19,10 @@ Current Question:
 """
 
 NEW_TEMPLATE = """
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-{ROLE}
-{GOAL}
-{FACTS_DUMP}
-<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+    SYSTEM:
+    {ROLE}
+    {GOAL}
+    {FACTS_DUMP}
 """
 
 CHAT_BOT_PROMPT = NEW_TEMPLATE.format(

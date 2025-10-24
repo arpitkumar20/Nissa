@@ -2,6 +2,7 @@ import os
 from typing import Optional
 from fastapi import HTTPException
 from openai import OpenAI
+from langchain_openai import ChatOpenAI
 
 from nisaa.prompt.chat_bot import CHAT_BOT_PROMPT
 from src.nisaa.helpers.logger import logger
@@ -9,6 +10,8 @@ from src.nisaa.graphs.state import ChatBotState
 from nisaa.helpers.top_k_fetch import query_pinecone_topk
 
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_MODEL=os.getenv('OPENAI_MODEL')
+LLM_TEMPERATURE=os.getenv('LLM_TEMPERATURE')
 PINECONE_NAMESPACE = os.getenv('PINECONE_NAMESPACE')
 PINECONE_TOP_K = os.getenv('PINECONE_TOP_K')
 
@@ -85,3 +88,22 @@ def prompt_builder_node(state: ChatBotState) -> dict:
     except Exception as e:
         logger.error(f"Prompt building failed: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Prompt building failed: {str(e)}")
+    
+
+def invoke_model_node(state: ChatBotState) -> dict:
+    try:
+        prompt = state.get("prompt")
+        if not prompt:
+            raise HTTPException(status_code=400, detail="Prompt not found in state")
+
+        llm = ChatOpenAI(
+            model=OPENAI_MODEL,
+            temperature=LLM_TEMPERATURE,
+            openai_api_key=OPENAI_API_KEY
+        )
+        raw_response = llm.invoke(prompt)
+        state["model_response"] = raw_response.content.replace("\n", " ").strip()
+        return state
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat response failed: {str(e)}")

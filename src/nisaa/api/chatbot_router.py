@@ -47,7 +47,7 @@ async def websocket_chatbot(websocket: WebSocket):
                 response = f"Error processing your message: {str(e)}"
             await manager.send_personal_message(
                 json.dumps(
-                    {"user_query": response} if isinstance(response, str) else response.get("user_query", {"error": "No response generated."})
+                    {"model_response": response} if isinstance(response, str) else response.get("model_response", {"error": "No response generated."})
                 ),
                 websocket
             )
