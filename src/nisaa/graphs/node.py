@@ -49,7 +49,7 @@ def top_k_finding(
 
         state["pinecone_results"] = results
         logger.info(f"Top-K search returned {len(results)} results")
-        print(">>>>>>>>state>>>>>>>>>>>",state)
+        # print(">>>>>>>>results>>>>>>>>>>>",state["pinecone_results"])
         return state
 
     except Exception as e:
