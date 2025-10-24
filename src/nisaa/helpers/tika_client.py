@@ -3,9 +3,6 @@ import requests
 import logging as log
 from typing import Dict
 from fastapi import UploadFile
-from dotenv import load_dotenv
-
-load_dotenv()
 
 TIKA_URL = os.getenv('TIKA_URL')
 if not TIKA_URL:
@@ -18,15 +15,6 @@ TIMEOUT = 300
 class TikaClient:
     @staticmethod
     def extract_text(upload_file: UploadFile) -> Dict[str, str]:
-        """
-        Extract text from an UploadFile using Tika server.
-
-        Args:
-            upload_file: FastAPI UploadFile object.
-
-        Returns:
-            Dict containing 'extracted_text'
-        """
         try:
             headers = {'Accept': 'text/plain'}
             file_bytes = upload_file.file.read()

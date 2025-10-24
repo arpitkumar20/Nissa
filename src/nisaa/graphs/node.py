@@ -2,15 +2,16 @@ import os
 from typing import Optional
 from fastapi import HTTPException
 from openai import OpenAI
-from src.nisaa.graphs.state import ChatBotState
-from src.nisaa.services.top_k_fetch import query_pinecone_topk
-
-from dotenv import load_dotenv
-load_dotenv()
 
 from src.nisaa.helpers.logger import logger
+from src.nisaa.graphs.state import ChatBotState
+from nisaa.helpers.top_k_fetch import query_pinecone_topk
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+PINECONE_NAMESPACE = os.getenv('PINECONE_NAMESPACE')
+PINECONE_TOP_K = os.getenv('PINECONE_TOP_K')
+
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def embed_query(state: ChatBotState) -> dict:
     try:
@@ -31,8 +32,8 @@ def embed_query(state: ChatBotState) -> dict:
 
 def top_k_finding(
     state: ChatBotState,
-    top_k: int = 5,
-    namespace: Optional[str] = None,
+    top_k: int = int(PINECONE_TOP_K),
+    namespace: Optional[str] = PINECONE_NAMESPACE,
     similarity_threshold: float = 0.3) -> dict:
 
     try:
@@ -47,9 +48,8 @@ def top_k_finding(
             similarity_threshold=similarity_threshold
         )
 
-        state["pinecone_results"] = results
+        state["neighbors"] = results
         logger.info(f"Top-K search returned {len(results)} results")
-        # print(">>>>>>>>results>>>>>>>>>>>",state["pinecone_results"])
         return state
 
     except Exception as e:
