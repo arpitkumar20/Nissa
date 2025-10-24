@@ -18,6 +18,8 @@ dependencies = [
     "numpy (>=2.3.4,<3.0.0)",
     "scikit-learn (>=1.7.2,<2.0.0)",
     "pinecone (>=7.3.0,<8.0.0)",
+    "langchain (>=1.0.2,<2.0.0)",
+    "langchain-openai (>=1.0.1,<2.0.0)",
 ]
 
 [tool.poetry]
