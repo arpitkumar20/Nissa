@@ -3,6 +3,7 @@ from typing import Optional
 from fastapi import HTTPException
 from openai import OpenAI
 
+from nisaa.prompt.chat_bot import CHAT_BOT_PROMPT
 from src.nisaa.helpers.logger import logger
 from src.nisaa.graphs.state import ChatBotState
 from nisaa.helpers.top_k_fetch import query_pinecone_topk
@@ -54,3 +55,33 @@ def top_k_finding(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Pinecone top-K search failed: {str(e)}")
+
+
+def prompt_builder_node(state: ChatBotState) -> dict:
+    try:
+        logger.info("Building prompt from context and user message...")
+
+        context = "\n".join(
+            neighbor.get('source_text', '').strip() 
+            for neighbor in state.get('neighbors', []) 
+            if neighbor.get('source_text')
+        )
+        user_message = state.get('user_query', '')
+
+        if not user_message:
+            raise ValueError("User message is missing from state.")
+        if not context:
+            context = "No relevant context available."
+
+        final_prompt = CHAT_BOT_PROMPT.format(
+            CONTEXT=context,
+            MESSAGE=user_message
+        )
+
+        state["prompt"] = final_prompt
+        logger.info("Prompt successfully built.")
+        return state
+
+    except Exception as e:
+        logger.error(f"Prompt building failed: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Prompt building failed: {str(e)}")
