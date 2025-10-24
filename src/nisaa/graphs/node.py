@@ -102,7 +102,7 @@ def invoke_model_node(state: ChatBotState) -> dict:
             openai_api_key=OPENAI_API_KEY
         )
         raw_response = llm.invoke(prompt)
-        state["model_response"] = raw_response.content.replace("\n", " ").strip()
+        state["model_response"] = raw_response.content.strip()
         return state
 
     except Exception as e:
