@@ -1,6 +1,7 @@
 import json
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import List
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+
 from src.nisaa.graphs.graph import chat_bot_graph
 
 router = APIRouter(prefix="/chatbot", tags=["chatbot"])
