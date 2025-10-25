@@ -4,7 +4,7 @@ from typing import Dict, Any
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.nisaa.api import chatbot_router
+from src.nisaa.api.chatbot_router import router as chatbot_router
 from src.nisaa.api.extract_router import router as extract_router
 from src.nisaa.api.wati_router import router as wati_router
 
@@ -27,7 +27,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(chatbot_router.router)
+app.include_router(chatbot_router)
 
 
 @health_router.get("/")
