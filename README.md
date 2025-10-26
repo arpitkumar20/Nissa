@@ -70,17 +70,123 @@ curl http://localhost:4011/
 
 ```
 Nisaa/
-├── main.py                    # Main entry point
-├── pyproject.toml            # Project configuration
-├── README.md                 # This file
-├── setup.sh                  # Setup script
-├── src/
-│   └── nisaa/
-│       ├── __init__.py
-│       └── api/
-│           └── rest_server.py # FastAPI server with routers
-└── tests/
+.
+├── Dockerfile
+├── README.md
+├── logs
+│   └── app.log
+├── main.py
+├── poetry.lock
+├── pyproject.toml
+├── setup.sh
+├── src
+│   └── nisaa
+│       ├── __init__.py
+│       ├── __pycache__
+│       │   ├── __init__.cpython-310.pyc
+│       │   └── __init__.cpython-311.pyc
+│       ├── api
+│       │   ├── __pycache__
+│       │   │   ├── chatbot_router.cpython-311.pyc
+│       │   │   ├── extract_router.cpython-311.pyc
+│       │   │   ├── rest_server.cpython-310.pyc
+│       │   │   ├── rest_server.cpython-311.pyc
+│       │   │   └── wati_router.cpython-311.pyc
+│       │   ├── chatbot_router.py
+│       │   ├── extract_router.py
+│       │   ├── rest_server.py
+│       │   └── wati_router.py
+│       ├── controllers
+│       │   ├── __pycache__
+│       │   │   └── extract_controller.cpython-311.pyc
+│       │   └── extract_controller.py
+│       ├── graphs
+│       │   ├── __pycache__
+│       │   │   ├── graph.cpython-311.pyc
+│       │   │   ├── node.cpython-311.pyc
+│       │   │   └── state.cpython-311.pyc
+│       │   ├── graph.py
+│       │   ├── node.py
+│       │   └── state.py
+│       ├── helpers
+│       │   ├── __pycache__
+│       │   │   ├── agent_factory.cpython-311.pyc
+│       │   │   ├── db.cpython-311.pyc
+│       │   │   ├── logger.cpython-311.pyc
+│       │   │   ├── long_term_memory.cpython-311.pyc
+│       │   │   ├── short_term_memory.cpython-311.pyc
+│       │   │   ├── tika_client.cpython-311.pyc
+│       │   │   └── top_k_fetch.cpython-311.pyc
+│       │   ├── db.py
+│       │   ├── logger.py
+│       │   ├── long_term_memory.py
+│       │   ├── short_term_memory.py
+│       │   ├── tika_client.py
+│       │   └── top_k_fetch.py
+│       ├── models
+│       │   ├── __pycache__
+│       │   │   └── extract_model.cpython-311.pyc
+│       │   └── extract_model.py
+│       ├── prompt
+│       │   ├── __pycache__
+│       │   │   └── chat_bot.cpython-311.pyc
+│       │   └── chat_bot.py
+│       └── services
+│           ├── __pycache__
+│           │   ├── pinecone_client.cpython-311.pyc
+│           │   ├── top_k_fetch.cpython-311.pyc
+│           │   ├── wati_api_service.cpython-311.pyc
+│           │   └── wati_webhook.cpython-311.pyc
+│           ├── pinecone_client.py
+│           └── wati_api_service.py
+└── tests
     └── __init__.py
+```
+
+### Installation Steps
+
+1. Clone the repository:
+```bash
+git clone https://github.com/arpitkumar20/Nissa.git
+```
+
+2. Create a virtual environment (first time only):
+```bash
+
+```
+
+3. Activate the virtual environment:
+```bash
+poetry shell
+```
+
+4. Upgrade pip:
+```bash
+poetry upgrade
+```
+
+5. Install dependencies:
+```bash
+poetry insatll
+```
+
+6. Run REST (Flask) Service:
+```bash
+python -m main.py
+```
+
+### NGROK
+
+```bash
+Domain : aeronautic-showier-marquitta.ngrok-free.app
+ngrok http 5004 --url aeronautic-showier-marquitta.ngrok-free.app
+ngrok http --url=aeronautic-showier-marquitta.ngrok-free.app 4011
+```
+
+### TIKA SERVER
+
+```bash
+docker run -d -p 9998:9998 logicalspark/docker-tikaserver
 ```
 
 ### Configuration

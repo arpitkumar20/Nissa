@@ -1,17 +1,27 @@
-ROLE = 'You are a helpful chatbot that answers questions about a social media platform.'
+from langchain_core.messages import HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-GOAL = (
-    "You will be provided with context from the application's settings and features.\n"
-    "Your task is to review the content and determine whether it violates any moderation guidelines.\n"
-    "Answer ONLY the user’s question based on the provided context. "
-    "If the answer is not in the context, say: 'I don’t know.' "
-    "Keep the answer short and factual (1-3 sentences). "
-    "Do NOT generate follow-up questions. "
-    "Make the final response human readable."
-)
+from nisaa.helpers.short_term_memory import build_chat_history
+from src.nisaa.helpers.short_term_memory import build_chat_history
+
+ROLE = """You are an intelligent assistant for a social media platform with access to platform documentation and conversation history."""
+
+GOAL = """
+Objectives:
+1. Answer questions using the provided context and chat history
+2. Check content against moderation guidelines when needed
+3. Provide accurate, concise responses (1-3 sentences)
+4. Use conversation history to maintain context
+
+Rules:
+- Only use information from the provided context
+- Never make up information
+- Keep responses short and factual
+- Make responses natural and human-readable
+"""
 
 FACTS_DUMP = """
-Context:
+
 {CONTEXT}
 
 Current Question:
@@ -19,14 +29,27 @@ Current Question:
 """
 
 NEW_TEMPLATE = """
-    SYSTEM:
-    {ROLE}
-    {GOAL}
-    {FACTS_DUMP}
+SYSTEM:
+{ROLE}
+
+{GOAL}
+
+{FACTS_DUMP}
 """
 
-CHAT_BOT_PROMPT = NEW_TEMPLATE.format(
-    ROLE=ROLE,
-    GOAL=GOAL,
-    FACTS_DUMP=FACTS_DUMP
-)
+def create_chat_prompt(thread_id, user_input, context=""):
+    chat_history = build_chat_history(thread_id)
+
+    facts = FACTS_DUMP.format(CONTEXT=context, MESSAGE=user_input)
+    prompt_text = NEW_TEMPLATE.format(
+        ROLE=ROLE,
+        GOAL=GOAL,
+        FACTS_DUMP=facts
+    )
+
+    prompt = ChatPromptTemplate.from_messages([
+        MessagesPlaceholder(variable_name="history"),
+        HumanMessage(content=prompt_text)
+    ])
+
+    return prompt, chat_history

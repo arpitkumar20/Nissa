@@ -1,7 +1,7 @@
 from langgraph.graph import END, START, StateGraph
 
 from src.nisaa.graphs.state import ChatBotState
-from src.nisaa.helpers.memory_store import checkpointer
+from nisaa.helpers.long_term_memory import checkpointer
 from src.nisaa.graphs.node import  embed_query , top_k_finding, prompt_builder_node, invoke_model_node
 
 def  chat_bot_graph():
