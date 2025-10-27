@@ -4,10 +4,10 @@ from typing import Dict, Any
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 
+from nisaa.api.zoho_router import router as zoho_router
+from src.nisaa.api.wati_router import router as wati_router
 from src.nisaa.api.chatbot_router import router as chatbot_router
 from src.nisaa.api.extract_router import router as extract_router
-from src.nisaa.api.wati_router import router as wati_router
-
 
 app = FastAPI(
     title="Nisaa API",
@@ -60,6 +60,7 @@ async def detailed_health_check() -> Dict[str, Any]:
 app.include_router(health_router)
 app.include_router(extract_router)
 app.include_router(wati_router)
+app.include_router(zoho_router)
 
 
 @app.get("/")

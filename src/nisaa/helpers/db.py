@@ -1,7 +1,17 @@
 import os
 from psycopg2 import pool
 
-DB_URI = os.getenv("DB_URI")
+DATABASE_HOST=os.getenv("DATABASE_HOST")
+DATABASE_PORT=os.getenv("DATABASE_PORT")
+DATABASE_USER=os.getenv("DATABASE_USER")
+DATABASE_PASS=os.getenv("DATABASE_PASS")
+DB_NAME=os.getenv("DB_NAME")
+
+DB_URI = f"postgresql://{DATABASE_USER}:{DATABASE_PASS}@{DATABASE_HOST}:{DATABASE_PORT}/{DB_NAME}"
+
+if not DB_URI:
+    raise ValueError("DB_URI environment variable is not set!")
+
 _pg_pool = pool.SimpleConnectionPool(1, 10, dsn=DB_URI)
 
 def save_message(thread_id: str, role: str, content: str):

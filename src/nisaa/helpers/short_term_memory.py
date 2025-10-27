@@ -5,9 +5,6 @@ from langchain_core.messages import HumanMessage, AIMessage
 from src.nisaa.helpers.postgres_store import PostgresMemoryStore
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL")
-DB_URI = os.getenv("DB_URI")
-if not DB_URI and OPENAI_MODEL:
-    raise ValueError("DB_URI and OPENAI_MODEL environment variable is not set!")
 
 def get_user_info(inputs: dict):
     """
