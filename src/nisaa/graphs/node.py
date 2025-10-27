@@ -81,7 +81,7 @@ def prompt_builder_node(state: dict) -> dict:
         state["prompt"] = prompt
         state["history"] = chat_history
 
-        logger.info(f"Prompt built successfully for phone: {phone}")
+        logger.info(f"Prompt built successfully")
         return state
 
     except Exception as e:
