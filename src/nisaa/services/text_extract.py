@@ -1,6 +1,9 @@
+"""
+Text preprocessing with URL preservation - EXISTING LOGIC INTACT
+"""
 import re
-import unicodedata
-from typing import List, Tuple, Dict, Optional
+from typing import Dict, List, Tuple, Optional
+from src.nisaa.helpers.logger import logger
 
 class TextPreprocessor:
     """Handles all text preprocessing operations with URL preservation"""
@@ -119,7 +122,7 @@ class TextPreprocessor:
     def normalize_unicode(self, text: str) -> str:
         if not self.config.get("normalize_unicode"):
             return text
-
+        import unicodedata
         return unicodedata.normalize("NFKD", text)
 
     def preprocess(self, text: str) -> Tuple[str, List[Dict[str, str]]]:

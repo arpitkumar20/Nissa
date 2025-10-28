@@ -1,5 +1,7 @@
+import json
+import os
 from tqdm import tqdm
-from typing import List, Optional
+from typing import Any, Iterator, List, Optional
 from langchain_core.documents import Document
 from langchain_community.document_loaders import (
     DirectoryLoader,
@@ -10,9 +12,50 @@ from langchain_community.document_loaders import (
     UnstructuredExcelLoader,
 )
 from langchain_community.document_loaders.xml import UnstructuredXMLLoader
+from yaml import BaseLoader
 
-from nisaa.helpers.logger import logger
-from nisaa.services.custom_loader import JSONStringLoader
+from src.nisaa.helpers.logger import logger
+
+class JSONStringLoader(BaseLoader):
+    """Custom loader that converts JSON to clean formatted string"""
+
+    def __init__(self, file_path: str):
+        self.file_path = file_path
+
+    def json_to_text(self, data: Any, indent: int = 0) -> str:
+        """Convert JSON to clean readable text format"""
+        lines = []
+        indent_str = "  " * indent
+
+        if isinstance(data, dict):
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    lines.append(f"{indent_str}{key}:")
+                    lines.append(self.json_to_text(value, indent + 1))
+                elif isinstance(value, list):
+                    lines.append(f"{indent_str}{key}:")
+                    for item in value:
+                        lines.append(self.json_to_text(item, indent + 1))
+                else:
+                    lines.append(f"{indent_str}{key}: {value}")
+        elif isinstance(data, list):
+            for item in data:
+                lines.append(self.json_to_text(item, indent))
+                lines.append("")
+        else:
+            lines.append(f"{indent_str}{data}")
+
+        return "\n".join(lines)
+
+    def lazy_load(self) -> Iterator[Document]:
+        """Lazy load JSON file as formatted text"""
+        with open(self.file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        json_string = self.json_to_text(data)
+
+        yield Document(page_content=json_string, metadata={"source": self.file_path})
+
 
 class DocumentLoader:
     """Handles loading documents from various file formats"""
@@ -55,23 +98,19 @@ class DocumentLoader:
             show_progress=False,
         )
 
-    def load_all_documents(self) -> List[Document]:
-        """Load all documents from directory with progress tracking"""
-        logger.info(f"Loading documents for company: {self.company_namespace}")
+    def load_all_documents(self, exclude_json: bool = True) -> List[Document]:
+        """
+        Load all documents from directory with progress tracking
+        
+        Args:
+            exclude_json: If True, skip JSON files (they'll be processed separately)
+        """
+        logger.info(f"📁 Loading documents for company: {self.company_namespace}")
         logger.info(f"Directory: {self.directory_path}")
 
         try:
-            file_types = [
-                ".pdf",
-                ".txt",
-                ".xml",
-                ".csv",
-                ".docx",
-                ".xlsx",
-                ".xls",
-                ".json",
-            ]
-
+            file_types = [".pdf", ".txt", ".xml", ".csv", ".docx", ".xlsx", ".xls"]
+            
             loaders = [
                 self.create_directory_loader(".pdf"),
                 self.create_text_loader(),
@@ -80,14 +119,17 @@ class DocumentLoader:
                 self.create_directory_loader(".docx"),
                 self.create_directory_loader(".xlsx"),
                 self.create_directory_loader(".xls"),
-                self.create_json_loader(),
             ]
+            
+            if not exclude_json:
+                file_types.append(".json")
+                loaders.append(self.create_json_loader())
 
             documents = []
 
             with tqdm(
                 total=len(loaders),
-                desc="File Types",
+                desc="📁 File Types",
                 unit="type",
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}]",
             ) as pbar:
@@ -97,6 +139,7 @@ class DocumentLoader:
                     try:
                         docs = loader.load()
                         documents.extend(docs)
+                        logger.info(f"Loaded {len(docs)} {file_type} documents")
                     except Exception as e:
                         logger.debug(f"No {file_type} files found or error: {e}")
                     pbar.update(1)
@@ -105,9 +148,18 @@ class DocumentLoader:
                 doc.metadata["company_namespace"] = self.company_namespace
                 doc.metadata["source_type"] = "file"
 
-            logger.info(f"Successfully loaded {len(documents)} documents from files")
+            logger.info(f"✅ Successfully loaded {len(documents)} documents from files")
             return documents
 
         except Exception as e:
             logger.error(f"Error loading documents: {str(e)}")
             raise
+
+    def get_json_files(self) -> List[str]:
+        """Get list of JSON files in the directory"""
+        json_files = []
+        for root, dirs, files in os.walk(self.directory_path):
+            for file in files:
+                if file.lower().endswith('.json'):
+                    json_files.append(os.path.join(root, file))
+        return json_files
