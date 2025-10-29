@@ -182,7 +182,10 @@ Domain : aeronautic-showier-marquitta.ngrok-free.app
 ngrok http 5004 --url aeronautic-showier-marquitta.ngrok-free.app
 ngrok http --url=aeronautic-showier-marquitta.ngrok-free.app 4011
 ```
-
+### DB URI 
+```
+"postgresql://postgres:mN7pR4xT9aQ1zK6b@raising-db-instance.ci1kiooywret.us-east-1.rds.amazonaws.com:5432/postgres"
+```
 ### TIKA SERVER
 
 ```bash

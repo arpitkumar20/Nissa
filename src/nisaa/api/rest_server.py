@@ -8,6 +8,7 @@ from nisaa.api.zoho_router import router as zoho_router
 from src.nisaa.api.wati_router import router as wati_router
 from src.nisaa.api.chatbot_router import router as chatbot_router
 from src.nisaa.api.extract_router import router as extract_router
+from src.nisaa.api.ingestion_router import router as  ingestion_router
 
 app = FastAPI(
     title="Nisaa API",
@@ -61,6 +62,7 @@ app.include_router(health_router)
 app.include_router(extract_router)
 app.include_router(wati_router)
 app.include_router(zoho_router)
+app.include_router(ingestion_router)
 
 
 @app.get("/")
