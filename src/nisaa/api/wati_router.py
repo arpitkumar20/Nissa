@@ -83,17 +83,17 @@ async def process_and_send_response(phone: str, text: str, request_id: str):
             logger.error(f"[{request_id}] Pipeline error: {result['error']}")
 
         # Send WhatsApp message
-        # try:
-        #     await asyncio.to_thread(send_whatsapp_message_v2, phone, agent_reply)
-        #     logger.info(f"[{request_id}] ✅ WhatsApp message sent successfully")
-        # except Exception as e:
-        #     logger.error(f"[{request_id}] ❌ Failed to send WhatsApp message: {e}")
-        #     # Try to send error message
-        #     try:
-        #         error_msg = "I apologize, but I encountered an issue sending the response. Please try again."
-        #         await asyncio.to_thread(send_whatsapp_message_v2, phone, error_msg)
-        #     except:
-        #         pass
+        try:
+            await asyncio.to_thread(send_whatsapp_message_v2, phone, agent_reply)
+            logger.info(f"[{request_id}] ✅ WhatsApp message sent successfully")
+        except Exception as e:
+            logger.error(f"[{request_id}] ❌ Failed to send WhatsApp message: {e}")
+            # Try to send error message
+            try:
+                error_msg = "I apologize, but I encountered an issue sending the response. Please try again."
+                await asyncio.to_thread(send_whatsapp_message_v2, phone, error_msg)
+            except:
+                pass
 
     except Exception as e:
         logger.error(f"[{request_id}] ❌ Background task failed: {e}", exc_info=True)

@@ -2,6 +2,7 @@ import os
 import requests
 import json
 import time
+import base64
 from typing import List, Optional, Dict
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,11 +12,13 @@ from fastapi.responses import JSONResponse
 from fastapi import APIRouter, Form, File, UploadFile, HTTPException
 from openai import BaseModel
 
+from src.nisaa.services.s3_downloader import download_all_files_from_s3
 from src.nisaa.helpers.logger import logger
 from src.nisaa.controllers.ingestion_pipeline import DataIngestionPipeline
 
 router = APIRouter(prefix="/data-ingestion", tags=["Data Ingestion"])
 
+ZOHO_REGION = os.getenv('ZOHO_REGION')
 
 class IngestionResponse(BaseModel):
     """Response model for ingestion endpoint"""
@@ -55,14 +58,13 @@ class ZohoCreatorExporter:
     }
     
     def __init__(self, client_id: str, client_secret: str, refresh_token: str, 
-                 owner_name: str, app_link_name: str, output_dir: str, 
-                 zoho_region: str = 'IN'):
+                 owner_name: str, output_dir: str, 
+                 zoho_region: str = ZOHO_REGION):
         """Initialize Exporter"""
         self.client_id = client_id
         self.client_secret = client_secret
         self.refresh_token = refresh_token
         self.account_owner = owner_name
-        self.app_link_name = app_link_name
         self.zoho_region = zoho_region.upper()
         
         if self.zoho_region not in self.ZOHO_CONFIG:
@@ -184,6 +186,52 @@ class ZohoCreatorExporter:
             logger.error(f"✗ Error fetching Zoho apps: {e}")
             raise
     
+    def get_all_applications(self) -> List[Dict]:
+        """Get all applications from Zoho account with enhanced debugging"""
+        url = f"{self.api_base_url}/creator/v2.1/meta/{self.account_owner}/applications"
+        
+        try:
+            logger.info(f"ðŸ” DEBUG: Fetching applications from: {url}")
+            logger.info(f"ðŸ” DEBUG: Account Owner: {self.account_owner}")
+            logger.info(f"ðŸ” DEBUG: Region: {self.zoho_region}")
+            
+            response = self.rate_limited_request(url)
+            
+            logger.info(f"ðŸ” DEBUG: Response Status Code: {response.status_code}")
+            
+            if response.status_code == 401:
+                raise ValueError("Authorization error - check OWNER_NAME and token")
+            
+            if response.status_code == 403:
+                raise ValueError("Forbidden - check API permissions and scopes")
+            
+            response.raise_for_status()
+            
+            response_data = response.json()
+            logger.info(f"ðŸ” DEBUG: Full Response: {json.dumps(response_data, indent=2)}")
+            
+            applications = response_data.get('applications', [])
+            
+            if not applications:
+                logger.error("âŒ No applications found in response")
+                logger.error(f"âŒ Response keys: {list(response_data.keys())}")
+                logger.error(f"âŒ Full response: {response_data}")
+                return []
+            
+            logger.info(f"âœ“ Found {len(applications)} Zoho applications")
+            
+            # Log application names for verification
+            for app in applications:
+                logger.info(f"   ðŸ“± {app.get('application_name')} (link: {app.get('link_name')})")
+            
+            return applications
+            
+        except Exception as e:
+            logger.error(f"âœ— Error fetching Zoho apps: {e}")
+            logger.error(f"âœ— Exception type: {type(e).__name__}")
+            raise
+ 
+
     def get_all_reports(self, app_link_name: str) -> List[Dict]:
         """Get all reports from application"""
         url = f"{self.api_base_url}/creator/v2.1/meta/{self.account_owner}/{app_link_name}/reports"
@@ -291,48 +339,80 @@ class ZohoCreatorExporter:
         logger.info(f"Progress: [{bar}] {percentage:.1f}% ({completed}/{total}) {status}")
     
     def export_all_data(self) -> Dict:
-        """Export all reports from application with progress bar"""
+        """Export all reports from ALL applications with progress bar"""
         start_time = time.time()
         
         try:
-            logger.info(f"🔄 Starting Zoho data export: {self.app_link_name}")
+            logger.info(f"ðŸ“„ Starting Zoho data export for ALL applications")
             
-            app = self.get_application_by_name(self.app_link_name)
-            if not app:
-                raise ValueError(f"Zoho application '{self.app_link_name}' not found")
-            
-            app_link_name = app['link_name']
+            # Get all applications
+            applications = self.get_all_applications()
+            if not applications:
+                raise ValueError("No Zoho applications found")
             
             output_dir = Path(self.export_config['output_dir'])
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            reports = self.get_all_reports(app_link_name)
+            # Collect all reports from all applications
+            all_reports_with_app = []
+            total_reports_count = 0
             
-            if not reports:
-                logger.warning("No Zoho reports found")
+            logger.info("=" * 70)
+            logger.info(f"ðŸ“Š Scanning {len(applications)} applications for reports...")
+            
+            for app in applications:
+                app_display_name = app.get('application_name', 'Unknown')
+                app_link_name = app['link_name']
+                
+                try:
+                    reports = self.get_all_reports(app_link_name)
+                    
+                    if reports:
+                        # Store reports with their app_link_name
+                        for report in reports:
+                            all_reports_with_app.append({
+                                'app_link_name': app_link_name,
+                                'app_display_name': app_display_name,
+                                'report': report
+                            })
+                        
+                        total_reports_count += len(reports)
+                        logger.info(f"   âœ“ {app_display_name}: {len(reports)} reports")
+                    else:
+                        logger.info(f"   - {app_display_name}: No reports")
+                        
+                except Exception as e:
+                    logger.warning(f"   âœ— {app_display_name}: Error - {e}")
+                    self.stats['errors'].append(f"Failed to get reports from {app_display_name}: {str(e)}")
+            
+            if not all_reports_with_app:
+                logger.warning("No Zoho reports found in any application")
                 return self.stats
             
-            self.stats['total_reports'] = len(reports)
+            self.stats['total_reports'] = total_reports_count
             
-            logger.info(f"📊 Exporting {len(reports)} Zoho reports (Workers: {self.export_config['max_workers']})...")
+            logger.info("=" * 70)
+            logger.info(f"ðŸ“Š Exporting {total_reports_count} reports from {len(applications)} applications (Workers: {self.export_config['max_workers']})...")
             logger.info("=" * 70)
             
             # Initial progress bar
-            self._update_progress(0, len(reports))
+            self._update_progress(0, total_reports_count)
             
             with ThreadPoolExecutor(max_workers=self.export_config['max_workers']) as executor:
                 future_to_report = {
                     executor.submit(
                         self.export_report_data,
-                        app_link_name,
-                        report,
+                        item['app_link_name'],
+                        item['report'],
                         output_dir
-                    ): report
-                    for report in reports
+                    ): item
+                    for item in all_reports_with_app
                 }
                 
                 for future in as_completed(future_to_report):
-                    report = future_to_report[future]
+                    item = future_to_report[future]
+                    report = item['report']
+                    app_display_name = item['app_display_name']
                     
                     try:
                         result = future.result()
@@ -346,44 +426,45 @@ class ZohoCreatorExporter:
                                     self.stats['json_files'] += 1
                                     self.stats['json_file_paths'].append(result['json_file'])
                                     
-                                    # Update progress with report name
+                                    # Update progress with app and report name
                                     self._update_progress(
                                         self.stats['reports_processed'], 
-                                        len(reports),
-                                        f"{result['report_name']} ({result['records_count']} records)"
+                                        total_reports_count,
+                                        f"[{app_display_name}] {result['report_name']} ({result['records_count']} records)"
                                     )
                                 else:
                                     # Empty report
                                     self._update_progress(
                                         self.stats['reports_processed'], 
-                                        len(reports),
-                                        f"{result['report_name']} (empty)"
+                                        total_reports_count,
+                                        f"[{app_display_name}] {result['report_name']} (empty)"
                                     )
                             else:
                                 if result['error']:
                                     self.stats['errors'].append(result['error'])
                                     self._update_progress(
                                         self.stats['reports_processed'], 
-                                        len(reports),
-                                        f"{result['report_name']} (ERROR)"
+                                        total_reports_count,
+                                        f"[{app_display_name}] {result['report_name']} (ERROR)"
                                     )
                     
                     except Exception as e:
-                        error_msg = f"Error processing '{report.get('display_name')}': {str(e)}"
+                        error_msg = f"Error processing '[{app_display_name}] {report.get('display_name')}': {str(e)}"
                         with self.stats_lock:
                             self.stats['errors'].append(error_msg)
                             self.stats['reports_processed'] += 1
                             self._update_progress(
                                 self.stats['reports_processed'], 
-                                len(reports),
-                                f"{report.get('display_name')} (FAILED)"
+                                total_reports_count,
+                                f"[{app_display_name}] {report.get('display_name')} (FAILED)"
                             )
             
             execution_time = time.time() - start_time
             
             logger.info("=" * 70)
-            logger.info(f"✅ Zoho Export Complete:")
-            logger.info(f"   Reports Exported: {self.stats['reports_processed']}/{len(reports)}")
+            logger.info(f"âœ… Zoho Export Complete:")
+            logger.info(f"   Applications: {len(applications)}")
+            logger.info(f"   Reports Exported: {self.stats['reports_processed']}/{total_reports_count}")
             logger.info(f"   JSON Files Created: {self.stats['json_files']}")
             logger.info(f"   Total Records: {self.stats['total_records']:,}")
             logger.info(f"   Errors: {len(self.stats['errors'])}")
@@ -394,11 +475,32 @@ class ZohoCreatorExporter:
             return self.stats
             
         except Exception as e:
-            logger.error(f"✗ Zoho export failed: {e}")
+            logger.error(f"âœ— Zoho export failed: {e}")
             raise
         finally:
             # Close session
             self.session.close()
+            
+def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
+    """
+    Decode base64 encoded Zoho credentials
+    
+    Expected format after decoding: JSON string with keys:
+    - zoho_client_id
+    - zoho_client_secret
+    - zoho_refresh_token
+    
+    Returns:
+        Dict with decoded credentials
+    """
+    try:
+        decoded_bytes = base64.b64decode(base64_str)
+        decoded_str = decoded_bytes.decode('utf-8')
+        credentials = json.loads(decoded_str)
+        return credentials
+    except Exception as e:
+        logger.error(f"Failed to decode Zoho credentials: {e}")
+        raise HTTPException(status_code=400, detail=f"Invalid base64 credentials format: {str(e)}")
 
 
 @router.post("/ingest", response_model=IngestionResponse)
@@ -406,13 +508,13 @@ async def run_data_ingestion(
     company_name: str = Form(None),
     db_uris: Optional[str] = Form(None),
     website_urls: Optional[str] = Form(None),
-    file_documents: Optional[List[UploadFile]] = File(None),
+    file_documents: Optional[str] = Form(None),
     # Zoho credentials
-    zoho_client_id: Optional[str] = Form(None),
-    zoho_client_secret: Optional[str] = Form(None),
-    zoho_refresh_token: Optional[str] = Form(None),
+    zoho_cred_encrypted: Optional[str] = Form(None),
+    zoho_client_id: Optional[str] = None,
+    zoho_client_secret: Optional[str] = None,
+    zoho_refresh_token: Optional[str] = None,
     zoho_owner_name: Optional[str] = Form(None),
-    zoho_app_link_name: Optional[str] = Form(None),
     zoho_region: Optional[str] = Form('IN'),
 ):
     """
@@ -446,15 +548,21 @@ async def run_data_ingestion(
         if not company_name:
             raise HTTPException(status_code=400, detail="'company_name' is required")
         
-        # Check if at least one data source is provided
-        has_zoho = all([zoho_client_id, zoho_client_secret, zoho_refresh_token, 
-                       zoho_owner_name, zoho_app_link_name])
+        # Extract Zoho credentials (either from base64 or direct fields)
+        if zoho_cred_encrypted and zoho_cred_encrypted.strip():
+            # Decode base64 credentials
+            decoded_creds = decode_zoho_credentials(zoho_cred_encrypted)
+            zoho_client_id = decoded_creds.get('zoho_client_id')
+            zoho_client_secret = decoded_creds.get('zoho_client_secret')
+            zoho_refresh_token = decoded_creds.get('zoho_refresh_token')
         
-        if not db_uris and not website_urls and not file_documents and not has_zoho:
-            raise HTTPException(
-                status_code=400,
-                detail="At least one data source must be provided (db_uris, website_urls, file_documents, or Zoho credentials)"
-            )
+        # Check if at least one data source is provided (also check for empty strings)
+        has_zoho = all([
+            zoho_client_id and zoho_client_id.strip(),
+            zoho_client_secret and zoho_client_secret.strip(),
+            zoho_refresh_token and zoho_refresh_token.strip(),
+            zoho_owner_name and zoho_owner_name.strip()
+        ]) 
         
         # Setup directory
         base_directory = "data"
@@ -470,34 +578,33 @@ async def run_data_ingestion(
                 logger.info("STEP 1: Fetching Zoho Data")
                 logger.info("=" * 70)
                 
+                # NEW
                 zoho_exporter = ZohoCreatorExporter(
                     client_id=zoho_client_id,
                     client_secret=zoho_client_secret,
                     refresh_token=zoho_refresh_token,
                     owner_name=zoho_owner_name,
-                    app_link_name=zoho_app_link_name,
                     output_dir=company_directory,
                     zoho_region=zoho_region or 'IN'
                 )
-                
                 zoho_stats = zoho_exporter.export_all_data()
                 zoho_files = [os.path.basename(f) for f in zoho_stats['json_file_paths']]
                 
                 if zoho_stats['errors']:
-                    logger.warning(f"⚠️ Zoho export had {len(zoho_stats['errors'])} errors")
+                    logger.warning(f"âš ï¸ Zoho export had {len(zoho_stats['errors'])} errors")
                     for error in zoho_stats['errors'][:5]:  # Show first 5 errors
                         logger.warning(f"  - {error}")
                     if len(zoho_stats['errors']) > 5:
                         logger.warning(f"  ... and {len(zoho_stats['errors']) - 5} more errors")
                 
-                logger.info(f"✅ Zoho data saved: {len(zoho_files)} JSON files with {zoho_stats['total_records']:,} total records")
+                logger.info(f"âœ… Zoho data saved: {len(zoho_files)} JSON files with {zoho_stats['total_records']:,} total records")
                 
             except Exception as zoho_error:
-                logger.error(f"❌ Zoho export failed: {zoho_error}")
+                logger.error(f"âŒ Zoho export failed: {zoho_error}")
                 raise HTTPException(
                     status_code=500,
                     detail=f"Zoho data export failed: {str(zoho_error)}"
-                )
+                ) 
         
         # STEP 2: Save uploaded files
         saved_files = []
@@ -505,19 +612,32 @@ async def run_data_ingestion(
             logger.info("=" * 70)
             logger.info(f"STEP 2: Saving {len(file_documents)} uploaded files")
             logger.info("=" * 70)
-            
-            for i, file in enumerate(file_documents, 1):
-                file_path = os.path.join(company_directory, file.filename)
-                
-                content = await file.read()
-                with open(file_path, "wb") as f:
-                    f.write(content)
-                
-                saved_files.append(file_path)
+
+            files = json.loads(file_documents) if file_documents else []
+
+            if not isinstance(files, list):
+                return JSONResponse(
+                    content={"error": "file_documents must be a JSON list of file paths"},
+                    status_code=400,
+                )
+
+            file_list = download_all_files_from_s3(files, company_name)
+
+            saved_files = []
+            for i, file_path in enumerate(file_list, 1):
+                filename = os.path.basename(file_path)
+                destination_path = os.path.join(company_directory, filename)
+
+                # ✅ Copy file instead of reading (since it's already downloaded locally)
+                with open(file_path, "rb") as src, open(destination_path, "wb") as dst:
+                    dst.write(src.read())
+
+                saved_files.append(destination_path)
+                print(f"{i}. Saved: {destination_path}")
                 
                 # Progress indicator
-                percentage = (i / len(file_documents)) * 100
-                logger.info(f"   [{percentage:.0f}%] ✓ {file.filename}")
+                percentage = (i / len(file_list)) * 100
+                logger.info(f"   [{percentage:.0f}%] ✓ {filename}")
             
             logger.info(f"✅ Uploaded files saved: {len(saved_files)} files")
         
