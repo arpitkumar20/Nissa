@@ -2,6 +2,7 @@ import os
 import requests
 import json
 import time
+import base64
 from typing import List, Optional, Dict
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,6 +22,7 @@ import base64
 router = APIRouter(prefix="/data-ingestion", tags=["Data Ingestion"])
 ZOHO_REGION = os.getenv("ZOHO_REGION", "IN")
 
+ZOHO_REGION = os.getenv('ZOHO_REGION')
 
 class IngestionResponse(BaseModel):
     """Response model for ingestion endpoint"""
