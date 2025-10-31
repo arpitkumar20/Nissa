@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from pathlib import Path
 from fastapi.responses import JSONResponse
-from fastapi import APIRouter, Form, File, UploadFile, HTTPException
+from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Request
 from openai import BaseModel
 from src.nisaa.services.zoho_data_downloader import ZohoCreatorBulkExporter
 from tqdm import tqdm
@@ -418,14 +418,27 @@ def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
         raise HTTPException(status_code=400, detail=f"Invalid credentials: {str(e)}")
     
 @router.post("/ingest", response_model=IngestionResponse)
+# async def run_data_ingestion(
+#     company_name: str = Form(None),
+#     db_uris: Optional[str] = Form(None),
+#     website_urls: Optional[str] = Form(None),
+#     s3_file_keys: Optional[str] = Form(None), 
+#     zoho_cred_encrypted: Optional[str] = Form(None),
+#     zoho_region: Optional[str] = Form('IN'),
+# ):
+
 async def run_data_ingestion(
-    company_name: str = Form(None),
-    db_uris: Optional[str] = Form(None),
-    website_urls: Optional[str] = Form(None),
-    s3_file_keys: Optional[str] = Form(None), 
-    zoho_cred_encrypted: Optional[str] = Form(None),
-    zoho_region: Optional[str] = Form('IN'),
+    request: Request
 ):
+    data = await request.json()
+
+    company_name = data.get('company_name', None)
+    db_uris = data.get('db_uris', None)
+    website_urls = data.get('website_urls', None)
+    s3_file_keys = data.get('s3_file_keys', None)
+    zoho_cred_encrypted = data.get('zoho_cred_encrypted', None)
+    zoho_region = data.get('zoho_region', 'IN')
+    
     """
     OPTIMIZED: Run data ingestion pipeline with progress tracking
 
@@ -453,22 +466,49 @@ async def run_data_ingestion(
         print("=" * 60)
 
         # Parse s3_file_keys from JSON string to list
+        # s3_file_keys_list = []
+        # if s3_file_keys and s3_file_keys.strip():
+        #     try:
+        #         # Try to parse as JSON array
+        #         parsed = json.loads(s3_file_keys)
+        #         if isinstance(parsed, list):
+        #             s3_file_keys_list = [str(key).strip() for key in parsed if key and str(key).strip()]
+        #         else:
+        #             raise HTTPException(
+        #                 status_code=400,
+        #                 detail="s3_file_keys must be a JSON array, e.g., [\"file1.pdf\", \"file2.docx\"]"
+        #             )
+        #     except json.JSONDecodeError as e:
+        #         raise HTTPException(
+        #             status_code=400,
+        #             detail=f"Invalid JSON format for s3_file_keys: {str(e)}. Expected: [\"file1.pdf\", \"file2.docx\"]"
+        #         )
+        # Parse s3_file_keys from JSON string to list
         s3_file_keys_list = []
-        if s3_file_keys and s3_file_keys.strip():
-            try:
-                # Try to parse as JSON array
-                parsed = json.loads(s3_file_keys)
-                if isinstance(parsed, list):
-                    s3_file_keys_list = [str(key).strip() for key in parsed if key and str(key).strip()]
-                else:
+        if s3_file_keys:
+            if isinstance(s3_file_keys, list):
+                # Already a list
+                s3_file_keys_list = [str(key).strip() for key in s3_file_keys if key and str(key).strip()]
+            elif isinstance(s3_file_keys, str):
+                # Try to parse JSON string
+                try:
+                    parsed = json.loads(s3_file_keys)
+                    if isinstance(parsed, list):
+                        s3_file_keys_list = [str(key).strip() for key in parsed if key and str(key).strip()]
+                    else:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="s3_file_keys must be a JSON array, e.g., [\"file1.pdf\", \"file2.docx\"]"
+                        )
+                except json.JSONDecodeError as e:
                     raise HTTPException(
                         status_code=400,
-                        detail="s3_file_keys must be a JSON array, e.g., [\"file1.pdf\", \"file2.docx\"]"
+                        detail=f"Invalid JSON format for s3_file_keys: {str(e)}. Expected: [\"file1.pdf\", \"file2.docx\"]"
                     )
-            except json.JSONDecodeError as e:
+            else:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid JSON format for s3_file_keys: {str(e)}. Expected: [\"file1.pdf\", \"file2.docx\"]"
+                    detail="s3_file_keys must be a JSON array or a JSON string representing an array."
                 )
     
         # STEP 1: Fetch Zoho data
