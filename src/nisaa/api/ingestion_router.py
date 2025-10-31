@@ -435,7 +435,7 @@ async def run_data_ingestion(
     company_name = data.get('company_name', None)
     db_uris = data.get('db_uris', None)
     website_urls = data.get('website_urls', None)
-    s3_file_keys = data.get('s3_file_keys', None)
+    s3_file_keys = data.get('s3_file_keys', [])
     zoho_cred_encrypted = data.get('zoho_cred_encrypted', None)
     zoho_region = data.get('zoho_region', 'IN')
     
