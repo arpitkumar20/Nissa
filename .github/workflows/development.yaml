@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.DEV_OPENAI_API_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
 
     steps:
       # Step 1: Checkout code
@@ -37,6 +39,8 @@ jobs:
             cd /home/${{ secrets.SERVER_USER }}/nisaa_poetry
 
             sed -i "s|ENV_OPENAI_API_KEY|${{ secrets.DEV_OPENAI_API_KEY }}|g" .env
+            sed -i "s|ENV_AWS_ACCESS_KEY_ID|${{ secrets.DEV_AWS_ACCESS_KEY_ID }}|g" .env
+            sed -i "s|ENV_AWS_SECRET_ACCESS_KEY|${{ secrets.DEV_AWS_SECRET_ACCESS_KEY }}|g" .env
             cat .env
 
             # Generate dynamic image tag (timestamp + run number)
