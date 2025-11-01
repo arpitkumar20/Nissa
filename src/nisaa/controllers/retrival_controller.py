@@ -30,7 +30,8 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX", "nisaa-knowledge")
-NAMESPACE = os.getenv("NAMESPACE", "IHI-MEDICAL-CAMP")
+#NAMESPACE = os.getenv("NAMESPACE", "IHI-MEDICAL-CAMP") 
+#file read and set on namespace
 
 # Retrieval Configuration
 TOP_K = int(os.getenv("TOP_K", "5"))
@@ -51,7 +52,7 @@ class HybridRAGQueryEngine:
     def __init__(
         self,
         pinecone_index_name: str = PINECONE_INDEX_NAME,
-        namespace: str = NAMESPACE,
+        namespace: str = None,
         embedding_model: str = EMBEDDING_MODEL,
         llm_model: str = LLM_MODEL,
         top_k: int = TOP_K,
@@ -59,6 +60,18 @@ class HybridRAGQueryEngine:
         temperature: float = 0.7,
         max_tokens: int = 2000,
     ):
+        print("================================retrival namespace for query ============================================================")
+        namespaces_file="web_info/web_info.json"
+        if not os.path.exists(namespaces_file):
+            raise FileNotFoundError(f"JSON file not found: {namespaces_file}")
+
+        with open(namespaces_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+            namespace = data.get("namespace")
+        print(namespace)
+        print("============================================================================================")
+
         """Initialize Hybrid RAG Query Engine"""
         self.pinecone_index_name = pinecone_index_name
         self.namespace = namespace

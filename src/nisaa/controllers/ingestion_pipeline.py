@@ -50,7 +50,7 @@ class DataIngestionPipeline:
         self.json_processor = JSONProcessor(
             os.getenv("OPENAI_API_KEY"),
             os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            int(os.getenv("MAX_WORKERS", "10")),
+            int(os.getenv("MAX_WORKERS", "3")),
         )
 
         self.embedding_service = EmbeddingService()
@@ -209,7 +209,7 @@ class DataIngestionPipeline:
 
             with tqdm(total=len(raw_documents), desc="Processing", unit="doc") as pbar:
                 with ThreadPoolExecutor(
-                    max_workers=int(os.getenv("MAX_WORKERS", "10"))
+                    max_workers=int(os.getenv("MAX_WORKERS", "3"))
                 ) as executor:
                     futures = {
                         executor.submit(self.process_document, doc): doc
@@ -290,8 +290,8 @@ class DataIngestionPipeline:
         print(f"\n🔄 Generating embeddings for {len(texts)} chunks...")
         embeddings = self.embedding_service.generate_for_documents(
             texts,
-            int(os.getenv("EMBEDDING_BATCH_SIZE", "100")),
-            int(os.getenv("MAX_WORKERS", "10")),
+            int(os.getenv("EMBEDDING_BATCH_SIZE", "25")),
+            int(os.getenv("MAX_WORKERS", "3")),
         )
 
         self.stats["total_embeddings"] = len(embeddings)

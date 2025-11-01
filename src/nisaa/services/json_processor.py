@@ -115,7 +115,7 @@ def convert_entity_to_text(entity_data: Dict) -> str:
 
 
 def convert_to_natural_language_batch(entities: List[Tuple[str, Dict]], api_key: str, 
-                                      model: str = "gpt-4o-mini", max_workers: int = 10) -> List[str]:
+                                      model: str = "gpt-4o-mini", max_workers: int = 3) -> List[str]:
     """Convert entities to natural language with ALL nested data included"""
     client = OpenAI(api_key=api_key)
     
@@ -258,7 +258,7 @@ def chunk_by_entities(entity_texts: List[str], max_chunk_size: int = 8000,
 class JSONProcessor:
     """Processes JSON files with nested list handling"""
     
-    def __init__(self, openai_api_key: str, model: str = "gpt-4o-mini", max_workers: int = 10):
+    def __init__(self, openai_api_key: str, model: str = "gpt-4o-mini", max_workers: int = 3):
         self.openai_api_key = openai_api_key
         self.model = model
         self.max_workers = max_workers
