@@ -3,7 +3,7 @@ import numpy as np
 from typing import List, Dict, Optional
 from sklearn.preprocessing import normalize
 from sklearn.metrics.pairwise import cosine_similarity
-
+import json
 from src.nisaa.helpers.logger import logger
 from src.nisaa.services.pinecone_client import pinecone_index
 
@@ -16,6 +16,18 @@ def query_pinecone_topk(
     namespace: Optional[str] = None,
     similarity_threshold: float = 0.3
 ) -> List[Dict]:
+
+    print("================================top k namespace for query ============================================================")
+    namespaces_file="web_info/web_info.json"
+    if not os.path.exists(namespaces_file):
+        raise FileNotFoundError(f"JSON file not found: {namespaces_file}")
+
+    with open(namespaces_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+        namespace = data.get("namespace")
+    print(namespace)
+    print("============================================================================================")
 
     logger.info(f"Querying Pinecone index with top_k={top_k}, namespace={namespace}")
 
