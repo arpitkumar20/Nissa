@@ -1,10 +1,17 @@
 """
-LangGraph Node Implementations for Agentic RAG Pipeline
-Each node performs a specific step in the conversation workflow
+LangGraph Node Implementations for Agentic RAG Pipeline - FIXED VERSION
+Key Changes:
+1. ✅ RAG engine created per-request with namespace (no singleton)
+2. ✅ New uncertainty detection node
+3. ✅ History loaded only when needed
+4. ✅ Retry mechanism with history
 """
 
+import json
+import os
 import time
 import logging
+import re
 from typing import Dict, Any
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from src.nisaa.controllers.retrival_controller import HybridRAGQueryEngine
@@ -13,123 +20,54 @@ from src.nisaa.helpers.postgres_store import PostgresMemoryStore
 
 logger = logging.getLogger(__name__)
 
-# Initialize RAG engine (singleton)
-_rag_engine = None
 
-
-def get_rag_engine() -> HybridRAGQueryEngine:
-    """Get or create the RAG engine instance"""
-    global _rag_engine
-    if _rag_engine is None:
-        logger.info("Initializing Hybrid RAG Engine...")
-        _rag_engine = HybridRAGQueryEngine(
-            top_k=5, similarity_threshold=0.65, temperature=0.7, max_tokens=2000
-        )
-        logger.info("RAG Engine initialized successfully")
-    return _rag_engine
-
-
-# ============================================================================
-# NODE 1: Load Chat History
-# ============================================================================
-
-
-def load_chat_history(state: GraphState) -> GraphState:
+def get_rag_engine(namespace: str) -> HybridRAGQueryEngine:
     """
-    Load recent conversation history from PostgreSQL
-    Adds historical messages to state for contextualization
+    ✅ FIX: Create a NEW RAG engine instance for each request
+    
+    This eliminates:
+    - Race conditions between concurrent requests
+    - Namespace mixing between different companies
+    - Singleton-related bugs
+    
+    Args:
+        namespace: Company-specific namespace from state
+        
+    Returns:
+        Fresh HybridRAGQueryEngine instance
     """
-    try:
-        log_state(state, "LOAD_CHAT_HISTORY")
-        thread_id = state["thread_id"]
-
-        # Initialize memory store
-        memory = PostgresMemoryStore(thread_id)
-
-        # Get last 10 messages (5 conversation turns)
-        history_messages = memory.get_langchain_messages(n=10)
-
-        logger.info(f"Loaded {len(history_messages)} messages from history")
-
-        # Add user's current query as HumanMessage
-        current_message = HumanMessage(content=state["user_query"])
-
-        # Combine history + current message
-        all_messages = history_messages + [current_message]
-
-        return {**state, "messages": all_messages}
-
-    except Exception as e:
-        logger.error(f"Error loading chat history: {e}")
-        # Continue with just the current query
-        return {**state, "messages": [HumanMessage(content=state["user_query"])]}
+    if not namespace:
+        raise ValueError("Namespace is required for RAG engine")
+    
+    logger.info(f"🔧 Creating RAG engine for namespace: {namespace}")
+    
+    return HybridRAGQueryEngine(
+        namespace=namespace,
+        top_k=5,
+        similarity_threshold=0.65,
+        temperature=0.7,
+        max_tokens=2000
+    )
 
 
 # ============================================================================
-# NODE 2: Contextualize Query
-# ============================================================================
-
-
-def contextualize_query(state: GraphState) -> GraphState:
-    """
-    Reformulate query based on chat history to make it standalone
-    If no history, use original query
-    """
-    try:
-        log_state(state, "CONTEXTUALIZE_QUERY")
-
-        messages = state["messages"]
-        user_query = state["user_query"]
-
-        # If no history (only current message), use original query
-        if len(messages) <= 1:
-            logger.info("No history - using original query")
-            return {**state, "contextualized_query": user_query}
-
-        # Build contextualization prompt
-        rag_engine = get_rag_engine()
-
-        context_prompt = """Given the conversation history, reformulate the last user question to be a standalone question that can be understood without the conversation context.
-
-Conversation History:
-"""
-        # Add history (excluding last message which is current query)
-        for msg in messages[:-1]:
-            if isinstance(msg, HumanMessage):
-                context_prompt += f"User: {msg.content}\n"
-            elif isinstance(msg, AIMessage):
-                context_prompt += f"Assistant: {msg.content}\n"
-
-        context_prompt += f"\nCurrent Question: {user_query}\n\nStandalone Question:"
-
-        # Use LLM to reformulate
-        standalone_question = rag_engine.llm.invoke(context_prompt).content
-
-        logger.info(f"Contextualized: '{user_query}' -> '{standalone_question}'")
-
-        return {**state, "contextualized_query": standalone_question}
-
-    except Exception as e:
-        logger.error(f"Error contextualizing query: {e}")
-        # Fallback to original query
-        return {**state, "contextualized_query": state["user_query"]}
-
-
-# ============================================================================
-# NODE 3: Detect ID/Phone
+# NODE 1: Detect ID/Phone (MOVED TO FIRST)
 # ============================================================================
 
 
 def detect_id_or_phone(state: GraphState) -> GraphState:
     """
-    Detect if query contains ID or phone number
-    Uses regex patterns from HybridRAGQueryEngine
+    ✅ MOVED TO FIRST: Detect ID/phone before anything else
+    This is cheap and determines our search strategy
     """
     try:
         log_state(state, "DETECT_ID_PHONE")
 
-        query = state["contextualized_query"]
-        rag_engine = get_rag_engine()
+        query = state["user_query"]
+        namespace = state["company_namespace"]
+        
+        # ✅ FIX: Create engine with namespace from state
+        rag_engine = get_rag_engine(namespace)
 
         # Use RAG engine's ID detection
         id_info = rag_engine.detect_id_in_query(query)
@@ -149,20 +87,23 @@ def detect_id_or_phone(state: GraphState) -> GraphState:
 
 
 # ============================================================================
-# NODE 4: Generate Embedding
+# NODE 2: Generate Embedding
 # ============================================================================
 
 
 def generate_embedding(state: GraphState) -> GraphState:
     """
-    Generate embedding for the contextualized query
+    Generate embedding for the user query
     Uses OpenAI text-embedding-3-small
     """
     try:
         log_state(state, "GENERATE_EMBEDDING")
 
-        query = state["contextualized_query"]
-        rag_engine = get_rag_engine()
+        query = state["user_query"]
+        namespace = state["company_namespace"]
+        
+        # ✅ FIX: Use namespace from state
+        rag_engine = get_rag_engine(namespace)
 
         # Generate embedding
         embedding = rag_engine.embeddings.embed_query(query)
@@ -177,7 +118,7 @@ def generate_embedding(state: GraphState) -> GraphState:
 
 
 # ============================================================================
-# NODE 5: Retrieve Documents (HYBRID)
+# NODE 3: Retrieve Documents (HYBRID)
 # ============================================================================
 
 
@@ -190,8 +131,9 @@ def retrieve_documents(state: GraphState) -> GraphState:
     try:
         log_state(state, "RETRIEVE_DOCUMENTS")
 
-        rag_engine = get_rag_engine()
-        query = state["contextualized_query"]
+        namespace = state["company_namespace"]
+        rag_engine = get_rag_engine(namespace)
+        query = state["user_query"]
 
         # Use hybrid retrieval from RAG engine
         docs, search_type = rag_engine.hybrid_retrieve(query, top_k=5)
@@ -221,9 +163,9 @@ def retrieve_documents(state: GraphState) -> GraphState:
             "error": str(e),
         }
 
- 
+
 # ============================================================================
-# NODE 6: Format Context
+# NODE 4: Format Context
 # ============================================================================
 
 
@@ -285,57 +227,51 @@ def format_context(state: GraphState) -> GraphState:
 
 
 # ============================================================================
-# NODE 7: Generate Response
+# NODE 5: Generate Response (INITIAL)
 # ============================================================================
 
 
 def generate_response(state: GraphState) -> GraphState:
     """
-    Generate final AI response using LLM with RAG context
-    Includes conversation history and retrieved documents
+    ✅ IMPROVED: Generate response WITHOUT history first
+    Faster and sufficient for most queries
     """
     try:
         log_state(state, "GENERATE_RESPONSE")
 
-        rag_engine = get_rag_engine()
+        namespace = state["company_namespace"]
+        rag_engine = get_rag_engine(namespace)
 
-        # Build prompt with context and history
-        system_message = """You are a helpful AI assistant with access to a knowledge base. Use the provided context to answer questions accurately and completely.
+        # Build prompt with context (NO HISTORY)
+        system_message = """You are a helpful AI assistant with access to a knowledge base. 
 
 Context from Knowledge Base:
 {context}
 
 Instructions:
-- Use ALL relevant information from the context
-- When asked about IDs, names, or phone numbers, extract them directly
+- Answer ONLY based on the provided context
+- If information is complete and clear, provide a confident, complete answer
+- If information is ambiguous or incomplete, clearly state: "I need to check our conversation history for more context"
+- When asked about IDs, names, or phone numbers, extract them directly from context
 - Be comprehensive and cite specific field names when relevant
-- If information is not in the context, clearly state that
-- Maintain conversational tone based on chat history"""
+- Maintain professional tone"""
 
         context = state["formatted_context"]
-        query = state["contextualized_query"]
-        messages = state["messages"]
+        query = state["user_query"]
 
-        # Build conversation for LLM
-        llm_messages = [SystemMessage(content=system_message.format(context=context))]
-
-        # Add history (excluding last message which is current query)
-        for msg in messages[:-1]:
-            llm_messages.append(msg)
-
-        # Add current query
-        llm_messages.append(HumanMessage(content=query))
+        # Simple prompt without history
+        llm_messages = [
+            SystemMessage(content=system_message.format(context=context)),
+            HumanMessage(content=query)
+        ]
 
         # Generate response
         response = rag_engine.llm.invoke(llm_messages)
         answer = response.content
 
-        logger.info(f"Generated response: {len(answer)} characters")
+        logger.info(f"Generated initial response: {len(answer)} characters")
 
-        # Update messages with AI response
-        updated_messages = messages + [AIMessage(content=answer)]
-
-        return {**state, "model_response": answer, "messages": updated_messages}
+        return {**state, "model_response": answer}
 
     except Exception as e:
         logger.error(f"Error generating response: {e}")
@@ -343,33 +279,180 @@ Instructions:
         return {
             **state,
             "model_response": error_msg,
-            "messages": state["messages"] + [AIMessage(content=error_msg)],
             "error": str(e),
         }
 
 
 # ============================================================================
-# NODE 8: Save to Memory
+# NODE 6: Detect Uncertainty (NEW)
+# ============================================================================
+
+
+def detect_uncertainty(state: GraphState) -> GraphState:
+    """
+    ✅ NEW NODE: Detect if the response indicates uncertainty
+    
+    Triggers retry with history if response contains uncertainty markers
+    """
+    try:
+        log_state(state, "DETECT_UNCERTAINTY")
+        
+        response = state["model_response"]
+        
+        # Uncertainty markers
+        uncertainty_phrases = [
+            "i need to check our conversation history",
+            "i don't have enough context",
+            "could you clarify",
+            "i'm not sure",
+            "based on our previous conversation",
+            "as we discussed",
+            "you mentioned earlier",
+            "without more context",
+            "unclear from the information",
+            "need more information",
+            "can you provide more details"
+        ]
+        
+        response_lower = response.lower()
+        is_uncertain = any(phrase in response_lower for phrase in uncertainty_phrases)
+        
+        # Also check if response is very short (might indicate insufficient info)
+        if len(response.strip()) < 50 and state["num_documents"] > 0:
+            is_uncertain = True
+            logger.info("Response too short - marking as uncertain")
+        
+        if is_uncertain:
+            logger.info("🔄 Uncertainty detected - will retry with conversation history")
+        else:
+            logger.info("✅ Response is confident - no retry needed")
+        
+        return {**state, "needs_history": is_uncertain}
+        
+    except Exception as e:
+        logger.error(f"Error in uncertainty detection: {e}")
+        return {**state, "needs_history": False}
+
+
+# ============================================================================
+# NODE 7: Load Chat History (CONDITIONAL)
+# ============================================================================
+
+
+def load_chat_history(state: GraphState) -> GraphState:
+    """
+    ✅ IMPROVED: Load chat history only when uncertainty detected
+    Much more efficient than always loading
+    """
+    try:
+        log_state(state, "LOAD_CHAT_HISTORY")
+        thread_id = state["thread_id"]
+        
+        memory = PostgresMemoryStore(thread_id)
+        history_messages = memory.get_langchain_messages(n=10)
+        
+        logger.info(f"Loaded {len(history_messages)} messages from history for retry")
+        
+        return {**state, "history_messages": history_messages}
+        
+    except Exception as e:
+        logger.error(f"Error loading chat history: {e}")
+        return {**state, "history_messages": []}
+
+
+# ============================================================================
+# NODE 8: Retry Generate with History (NEW)
+# ============================================================================
+
+
+def retry_generate_with_history(state: GraphState) -> GraphState:
+    """
+    ✅ NEW NODE: Regenerate response using conversation history
+    Only called when initial response was uncertain
+    """
+    try:
+        log_state(state, "RETRY_GENERATE_WITH_HISTORY")
+
+        namespace = state["company_namespace"]
+        rag_engine = get_rag_engine(namespace)
+
+        system_message = """You are a helpful AI assistant with access to a knowledge base and conversation history.
+
+Context from Knowledge Base:
+{context}
+
+Conversation History:
+{history}
+
+Instructions:
+- Use BOTH the context and conversation history to provide a complete answer
+- Reference previous messages when relevant
+- Maintain conversational continuity
+- Be comprehensive and accurate
+- If information is still insufficient, clearly state what's missing"""
+
+        context = state["formatted_context"]
+        query = state["user_query"]
+        history_messages = state.get("history_messages", [])
+        
+        # Build history string
+        history_text = ""
+        for msg in history_messages:
+            if isinstance(msg, HumanMessage):
+                history_text += f"User: {msg.content}\n"
+            elif isinstance(msg, AIMessage):
+                history_text += f"Assistant: {msg.content}\n"
+        
+        # Create messages with history
+        llm_messages = [
+            SystemMessage(content=system_message.format(
+                context=context,
+                history=history_text
+            ))
+        ]
+        
+        # Add history messages
+        llm_messages.extend(history_messages)
+        
+        # Add current query
+        llm_messages.append(HumanMessage(content=query))
+
+        # Generate response with history
+        response = rag_engine.llm.invoke(llm_messages)
+        answer = response.content
+
+        logger.info(f"Generated response with history: {len(answer)} characters")
+
+        return {**state, "model_response": answer}
+
+    except Exception as e:
+        logger.error(f"Error in retry generation: {e}")
+        # Keep original response if retry fails
+        return state
+
+
+# ============================================================================
+# NODE 9: Save to Memory
 # ============================================================================
 
 
 def save_to_memory(state: GraphState) -> GraphState:
     """
     Save conversation turn to PostgreSQL
-    Stores contextualized query (user) and AI response
+    Stores original query (user) and final AI response
     """
     try:
         log_state(state, "SAVE_TO_MEMORY")
 
         thread_id = state["thread_id"]
-        contextualized_query = state["contextualized_query"]
+        user_query = state["user_query"]
         model_response = state["model_response"]
 
         # Initialize memory store
         memory = PostgresMemoryStore(thread_id)
 
-        # Save user message (contextualized version)
-        memory.put("user", contextualized_query)
+        # Save user message
+        memory.put("user", user_query)
 
         # Save assistant response
         memory.put("assistant", model_response)
@@ -382,4 +465,3 @@ def save_to_memory(state: GraphState) -> GraphState:
         logger.error(f"Error saving to memory: {e}")
         # Don't fail the whole pipeline if memory save fails
         return {**state, "error": f"Memory save error: {str(e)}"}
- 

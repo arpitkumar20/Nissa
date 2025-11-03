@@ -1,34 +1,21 @@
 import os
-import requests
+import asyncio
 import json
-import time
 import base64
 from typing import List, Optional, Dict
-from datetime import datetime
-from pathlib import Path
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
-from fastapi import APIRouter, Form, File, UploadFile, HTTPException, Request
 from pydantic import BaseModel
 
-# IMPORTANT: Use the fixed exporter
+from nisaa.controllers.file_deduplication import FileDeduplicator, DBDeduplicator, ZohoDeduplicator
+from nisaa.controllers.job_manager import JobManager, JobStatus
 from src.nisaa.services.zoho_data_downloader import ZohoCreatorExporter
 from nisaa.services.s3_downloader import download_all_files_from_s3
 from src.nisaa.helpers.logger import logger
+from src.nisaa.helpers.db import get_pool
 from src.nisaa.controllers.ingestion_pipeline import DataIngestionPipeline
 
 router = APIRouter(prefix="/data-ingestion", tags=["Data Ingestion"])
-
-
-class IngestionResponse(BaseModel):
-    """Response model for ingestion endpoint"""
-
-    status: str
-    company_name: str
-    company_directory: str
-    uploaded_files: List[str]
-    zoho_files: List[str]
-    statistics: dict
-    message: str
 
 
 def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
@@ -43,251 +30,566 @@ def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
         logger.error(f"❌ Failed to decode credentials: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid credentials: {str(e)}")
 
+
 def save_name(namespace: str, folder_path: str = "web_info", filename: str = "web_info.json"):
-        """
-        Save a single 'namespace' to a JSON file.
-        If the file exists, overwrite the namespace value (only one key is stored).
-        Always ensures the folder exists before saving.
-        """
-        # Ensure folder exists
-        os.makedirs(folder_path, exist_ok=True)
-
-        # Full file path
-        file_path = os.path.join(folder_path, filename)
-
-        # Load old data if file exists (not strictly necessary since we overwrite)
-        if os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8") as f:
-                try:
-                    data = json.load(f)
-                except json.JSONDecodeError:
-                    data = {}
-        else:
-            data = {}
-
-        # Update namespace (only one key)
-        data["namespace"] = namespace
-
-        # Write updated data back to file
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-
-        print(f"✅ Namespace '{namespace}' saved to {file_path} successfully!")
-        return namespace
-
-@router.post("/ingest", response_model=IngestionResponse)
-async def run_data_ingestion(request: Request):
-    """
-    PRODUCTION: Data ingestion pipeline with Zoho export
-
-    Payload:
-    {
-        "company_name": "mycompany",
-        "zoho_cred_encrypted": "base64_encoded_json",
-        "zoho_region": "IN",
-        "s3_file_keys": ["file1.pdf", "file2.docx"],
-        "db_uris": "mongodb://...",
-        "website_urls": "https://example.com"
-    }
-    """
-    data = await request.json()
-
-    company_name = data.get("company_name", None)
-    db_uris = data.get("db_uris", None)
-    website_urls = data.get("website_urls", None)
-    s3_file_keys = data.get("s3_file_keys", [])
-    zoho_cred_encrypted = data.get("zoho_cred_encrypted", None)
-    zoho_region = data.get("zoho_region", "IN")
-
-    company_directory = None
-    zoho_files = []
-    base_directory = "data"
-    company_directory = os.path.join(base_directory, company_name)
-    os.makedirs(company_directory, exist_ok=True)
-
-    try:
-        # ============= VALIDATION =============
-        if not company_name:
-            raise HTTPException(status_code=400, detail="'company_name' is required")
-
-        print("\n" + "=" * 70)
-        print(f"🚀 DATA INGESTION PIPELINE: {company_name.upper()}")
-        print("=" * 70)
-
-        # ============= PARSE S3 FILE KEYS =============
-        s3_file_keys_list = []
-        if s3_file_keys:
-            if isinstance(s3_file_keys, list):
-                s3_file_keys_list = [
-                    str(key).strip() for key in s3_file_keys if key and str(key).strip()
-                ]
-            elif isinstance(s3_file_keys, str):
-                try:
-                    parsed = json.loads(s3_file_keys)
-                    if isinstance(parsed, list):
-                        s3_file_keys_list = [
-                            str(key).strip()
-                            for key in parsed
-                            if key and str(key).strip()
-                        ]
-                    else:
-                        raise HTTPException(
-                            status_code=400, detail="s3_file_keys must be a JSON array"
-                        )
-                except json.JSONDecodeError as e:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid JSON for s3_file_keys: {str(e)}",
-                    )
-            else:
-                raise HTTPException(
-                    status_code=400,
-                    detail="s3_file_keys must be a JSON array or string",
-                )
-
-        # ============= PHASE 1: ZOHO DATA EXTRACTION =============
-        if zoho_cred_encrypted and zoho_cred_encrypted.strip():
-            print("\n📥 PHASE 1: ZOHO DATA EXTRACTION")
-            print("-" * 70)
-
+    """Save namespace to JSON file"""
+    os.makedirs(folder_path, exist_ok=True)
+    file_path = os.path.join(folder_path, filename)
+    
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
             try:
-                # Decode credentials
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
+    else:
+        data = {}
+    
+    data["namespace"] = namespace
+    
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+    
+    print(f"✅ Namespace '{namespace}' saved to {file_path} successfully!")
+    return namespace
+
+
+async def run_ingestion_pipeline(
+    job_id: str,
+    company_name: str,
+    company_directory: str,
+    s3_file_keys_list: List[str],
+    zoho_cred_encrypted: Optional[str],
+    zoho_region: str,
+    db_uri_list: List[str],
+    website_url_list: List[str]
+):
+    """Background task to run ingestion pipeline"""
+    job_manager = JobManager(get_pool())
+    
+    try:
+        job_manager.update_job_status(job_id, JobStatus.RUNNING)
+        logger.info(f"[{job_id}] Starting ingestion for {company_name}")
+        
+        zoho_files = []
+        all_file_paths = []
+        
+        # PHASE 1: ZOHO DATA EXTRACTION
+        if zoho_cred_encrypted and zoho_cred_encrypted.strip():
+            logger.info(f"[{job_id}] PHASE 1: ZOHO DATA EXTRACTION")
+            
+            try:
                 decoded_creds = decode_zoho_credentials(zoho_cred_encrypted)
                 zoho_client_id = decoded_creds.get("zoho_client_id")
                 zoho_client_secret = decoded_creds.get("zoho_client_secret")
                 zoho_refresh_token = decoded_creds.get("zoho_refresh_token")
                 zoho_owner_name = decoded_creds.get("zoho_owner_name")
-
-                if not all(
-                    [
-                        zoho_client_id,
-                        zoho_client_secret,
-                        zoho_refresh_token,
-                        zoho_owner_name,
-                    ]
-                ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Incomplete Zoho credentials. Required: zoho_client_id, zoho_client_secret, zoho_refresh_token, zoho_owner_name",
-                    )
-
-                # Create exporter (uses fixed version with pagination)
+                
+                if not all([zoho_client_id, zoho_client_secret, zoho_refresh_token, zoho_owner_name]):
+                    raise ValueError("Incomplete Zoho credentials")
+                
                 zoho_exporter = ZohoCreatorExporter(
                     client_id=zoho_client_id,
                     client_secret=zoho_client_secret,
                     refresh_token=zoho_refresh_token,
                     owner_name=zoho_owner_name,
                     output_dir=company_directory,
-                    zoho_region=zoho_region or "IN",
+                    zoho_region=zoho_region
                 )
-
-                # Export all data
+                
                 zoho_stats = zoho_exporter.export_all_data()
-                zoho_files = [
-                    os.path.basename(f) for f in zoho_stats["json_file_paths"]
-                ]
-
-                print(
-                    f"\n✅ Zoho extraction complete: {len(zoho_files)} file(s), {zoho_stats['total_records']:,} records"
-                )
-
-            except HTTPException:
-                raise
+                zoho_files = zoho_stats["json_file_paths"]
+                
+                logger.info(f"[{job_id}] ✅ Zoho: {len(zoho_files)} files exported")
+                
             except Exception as zoho_error:
-                print(f"\n❌ Zoho extraction failed: {zoho_error}")
-                logger.error(f"Zoho error: {zoho_error}", exc_info=True)
-                raise HTTPException(
-                    status_code=500, detail=f"Zoho extraction error: {str(zoho_error)}"
-                )
-
-        # ============= PHASE 2: S3 FILE DOWNLOAD =============
-        downloaded_s3_files = []
+                logger.error(f"[{job_id}] ❌ Zoho extraction failed: {zoho_error}")
+                raise
+        
+        # PHASE 2: S3 FILE DOWNLOAD
         if len(s3_file_keys_list) > 0:
-            print("\n📥 PHASE 2: S3 FILE DOWNLOAD")
-            print("-" * 70)
-            logger.info(f"Downloading {len(s3_file_keys_list)} files from S3...")
-
-            downloaded_s3_files = download_all_files_from_s3(
-                file_list=s3_file_keys_list, company_name=company_name
+            logger.info(f"[{job_id}] PHASE 2: S3 FILE DOWNLOAD")
+            
+            downloaded_s3_files = await asyncio.to_thread(
+                download_all_files_from_s3,
+                file_list=s3_file_keys_list,
+                company_name=company_name
             )
-            logger.info(f"✅ Downloaded {len(downloaded_s3_files)} files from S3")
-
-        all_saved_files = downloaded_s3_files
-
-        # ============= PHASE 3: PARSE INPUTS =============
-        db_uri_list = [uri.strip() for uri in db_uris.split(",")] if db_uris else []
-        website_url_list = (
-            [url.strip() for url in website_urls.split(",")] if website_urls else []
+            
+            all_file_paths.extend(downloaded_s3_files)
+            logger.info(f"[{job_id}] ✅ Downloaded {len(downloaded_s3_files)} files from S3")
+        
+        # ✅ PHASE 3: ZOHO FILE DEDUPLICATION (NEW!)
+        zoho_info = {"new": [], "skipped": []}
+        if zoho_files:
+            logger.info(f"[{job_id}] PHASE 3: ZOHO FILE DEDUPLICATION")
+            
+            new_zoho_reports, skipped_zoho_reports = ZohoDeduplicator.filter_new_zoho_reports(
+                zoho_json_files=zoho_files,
+                job_manager=job_manager,
+                company_name=company_name
+            )
+            
+            zoho_info = {
+                "new": new_zoho_reports,
+                "skipped": skipped_zoho_reports
+            }
+            
+            # Only add NEW Zoho files to all_file_paths
+            new_zoho_file_paths = [report['file_path'] for report in new_zoho_reports]
+            all_file_paths.extend(new_zoho_file_paths)
+            
+            logger.info(
+                f"[{job_id}] Zoho: {len(new_zoho_reports)} new, "
+                f"{len(skipped_zoho_reports)} skipped"
+            )
+        
+        # PHASE 4: REGULAR FILE DEDUPLICATION
+        logger.info(f"[{job_id}] PHASE 4: REGULAR FILE DEDUPLICATION")
+        
+        new_files, skipped_files = FileDeduplicator.filter_new_files(
+            file_paths=all_file_paths,
+            job_manager=job_manager,
+            company_name=company_name
         )
+        
+        total_files = len(new_files) + len(skipped_files) + len(zoho_info["skipped"])
+        
+        job_manager.update_job_status(
+            job_id,
+            JobStatus.RUNNING,
+            total_files=total_files,
+            skipped_files=len(skipped_files) + len(zoho_info["skipped"])
+        )
+        
+        logger.info(
+            f"[{job_id}] Files: {len(new_files)} new, "
+            f"{len(skipped_files)} skipped (regular), "
+            f"{len(zoho_info['skipped'])} skipped (Zoho)"
+        )
+        
+        # If no new content, complete early
+        if len(new_files) == 0 and not db_uri_list and not website_url_list:
+            logger.info(f"[{job_id}] No new content to process")
+            job_manager.update_job_status(
+                job_id,
+                JobStatus.COMPLETED,
+                processed_files=0,
+                total_vectors=0
+            )
+            return
+        
+        # PHASE 5: DATA INGESTION PIPELINE
+        logger.info(f"[{job_id}] PHASE 5: DATA INGESTION PIPELINE")
 
-        # ============= PHASE 4: DATA INGESTION PIPELINE =============
-        print("\n🔄 PHASE 3: DATA INGESTION PIPELINE")
-        print("-" * 70)
-        logger.info(f"Running ingestion pipeline for: {company_name}")
+        # Extract only new file paths for processing
+        new_file_paths = [file_info['file_path'] for file_info in new_files]
+
+        logger.info(f"[{job_id}] Processing {len(new_file_paths)} new files")
 
         pipeline = DataIngestionPipeline(
             company_namespace=company_name,
-            directory_path=company_directory,
+            directory_path=company_directory if len(new_files) > 0 else None,
+            file_paths=new_file_paths if len(new_files) > 0 else None,
             db_uris=db_uri_list,
             website_urls=website_url_list,
-            proxies=None,
+            proxies=None
         )
 
-        stats = pipeline.run()
+        # Pass job_manager for website/database deduplication
+        stats = await asyncio.to_thread(pipeline.run, job_manager, company_name)
+        
+        # PHASE 6: MARK FILES AS PROCESSED
+        logger.info(f"[{job_id}] PHASE 6: MARKING FILES AS PROCESSED")
+        
+        vectors_per_file = stats['vectors_upserted'] // max(len(new_files), 1)
+        
+        for file_info in new_files:
+            try:
+                job_manager.mark_file_processed(
+                    company_name=company_name,
+                    file_path=file_info['file_path'],
+                    file_hash=file_info['file_hash'],
+                    file_size=file_info['file_size'],
+                    file_type=file_info['file_type'],
+                    vector_count=vectors_per_file,
+                    job_id=job_id,
+                    metadata={"source": "ingestion_pipeline"}
+                )
+            except Exception as e:
+                logger.error(f"[{job_id}] Failed to mark file {file_info['file_path']}: {e}")
 
-        # ============= RESPONSE =============
-        response_data = {
-            "status": "success",
-            "company_name": company_name,
-            "company_directory": company_directory,
-            "uploaded_files": [os.path.basename(f) for f in all_saved_files],
-            "zoho_files": zoho_files,
-            "statistics": {
-                "total_documents_loaded": stats["total_documents"],
-                "source_breakdown": {
-                    "files": stats["file_documents"],
-                    "databases": stats["database_documents"],
-                    "websites": stats["website_documents"],
-                    "json_files": stats["json_documents"],
-                    "zoho_files": len(zoho_files),
-                },
-                "processing": {
-                    "successfully_processed": stats["processed_documents"],
-                    "failed_or_skipped": stats["failed_documents"],
-                    "total_chunks": stats["total_chunks"],
-                    "json_chunks": stats["json_chunks"],
-                },
-                "embeddings": {
-                    "total_generated": stats["total_embeddings"] + stats["json_chunks"],
-                    "vectors_stored": stats["vectors_upserted"],
-                },
-                "performance": {
-                    "processing_time_seconds": round(stats["processing_time"], 2)
-                },
-            },
-            "message": f"Knowledge base for '{company_name}' created successfully with {stats['vectors_upserted']} vectors",
-        }
-    
-        namespace_info = save_name(namespace=company_name,folder_path="web_info",filename="web_info.json")
-        print("==========================WEB INFO NAMESPACE SAVE===========================================================")
-        print(namespace_info)
-        print("=====================================================================================")
+        # ✅ PHASE 7: MARK ZOHO REPORTS AS PROCESSED (NEW!)
+        if zoho_info['new']:
+            logger.info(f"[{job_id}] PHASE 7: MARKING ZOHO REPORTS AS PROCESSED")
+            
+            for zoho_report in zoho_info['new']:
+                try:
+                    job_manager.mark_zoho_report_processed(
+                        company_name=company_name,
+                        report_name=zoho_report['report_name'],
+                        content_hash=zoho_report['content_hash'],
+                        record_count=zoho_report['record_count'],
+                        vector_count=vectors_per_file * zoho_report['record_count'],
+                        job_id=job_id,
+                        app_name=zoho_report.get('app_name', 'Unknown'),
+                        metadata={"source": "zoho_export"}
+                    )
+                except Exception as e:
+                    logger.error(f"[{job_id}] Failed to mark Zoho report: {e}")
 
-        print("\n" + "=" * 70)
-        print("✅ INGESTION COMPLETE")
-        print("-" * 70)
-        print(f"   📊 Company: {company_name}")
-        print(f"   📁 Zoho files: {len(zoho_files)}")
-        print(f"   📁 S3 files: {len(downloaded_s3_files)}")
-        print(f"   💾 Total vectors: {stats['vectors_upserted']:,}")
-        print("=" * 70)
+        # PHASE 8: MARK WEBSITES AS PROCESSED
+        if hasattr(pipeline, 'website_info') and pipeline.website_info:
+            logger.info(f"[{job_id}] PHASE 8: MARKING WEBSITES AS PROCESSED")
+            
+            for website_info in pipeline.website_info.get('new', []):
+                try:
+                    job_manager.mark_website_processed(
+                        company_name=company_name,
+                        website_url=website_info['url'],
+                        content_hash=website_info['content_hash'],
+                        page_count=website_info['page_count'],
+                        vector_count=vectors_per_file * website_info['page_count'],
+                        job_id=job_id,
+                        metadata={"source": "website_scraping"}
+                    )
+                except Exception as e:
+                    logger.error(f"[{job_id}] Failed to mark website: {e}")
 
-        return JSONResponse(status_code=200, content=response_data)
+        # PHASE 9: MARK DATABASES AS PROCESSED
+        if hasattr(pipeline, 'db_info') and pipeline.db_info:
+            logger.info(f"[{job_id}] PHASE 9: MARKING DATABASES AS PROCESSED")
+            
+            for db_info in pipeline.db_info.get('new', []):
+                try:
+                    job_manager.mark_database_processed(
+                        company_name=company_name,
+                        db_uri=db_info['db_uri'],
+                        db_hash=db_info['db_hash'],
+                        db_type=db_info['db_type'],
+                        db_name=db_info['db_name'] or 'unknown',
+                        vector_count=vectors_per_file,
+                        job_id=job_id,
+                        metadata={"source": "database_ingestion"}
+                    )
+                except Exception as e:
+                    logger.error(f"[{job_id}] Failed to mark database: {e}")
 
-    except HTTPException:
-        raise
-
+        # FINALIZE
+        save_name(namespace=company_name)
+        
+        job_manager.update_job_status(
+            job_id,
+            JobStatus.COMPLETED,
+            processed_files=len(new_files),
+            total_vectors=stats['vectors_upserted']
+        )
+        
+        logger.info(
+            f"[{job_id}] ✅ COMPLETED: {len(new_files)} files, "
+            f"{stats['vectors_upserted']} vectors"
+        )
+        
     except Exception as e:
-        error_msg = f"Data ingestion failed: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        raise HTTPException(status_code=500, detail=error_msg)
+        error_msg = f"Ingestion failed: {str(e)}"
+        logger.error(f"[{job_id}] ❌ {error_msg}", exc_info=True)
+        
+        job_manager.update_job_status(
+            job_id,
+            JobStatus.FAILED,
+            error_message=error_msg
+        )
+
+
+@router.post("/ingest")
+async def create_ingestion_job(
+    request: Request,
+    background_tasks: BackgroundTasks
+):
+    """
+    Create ingestion job and return immediately with job_id
+    """
+    data = await request.json()
+    
+    company_name = data.get("company_name")
+    db_uris = data.get("db_uris", [])
+    website_urls = data.get("website_urls", [])
+    s3_file_keys = data.get("s3_file_keys", [])
+    zoho_cred_encrypted = data.get("zoho_cred_encrypted")
+    zoho_region = data.get("zoho_region", "IN")
+    
+    if not company_name:
+        raise HTTPException(status_code=400, detail="'company_name' is required")
+    
+    # Create company directory
+    base_directory = "data"
+    company_directory = os.path.join(base_directory, company_name)
+    os.makedirs(company_directory, exist_ok=True)
+    
+    # Parse S3 file keys
+    s3_file_keys_list = []
+    if s3_file_keys:
+        if isinstance(s3_file_keys, list):
+            s3_file_keys_list = [str(key).strip() for key in s3_file_keys if key]
+        elif isinstance(s3_file_keys, str):
+            try:
+                parsed = json.loads(s3_file_keys)
+                if isinstance(parsed, list):
+                    s3_file_keys_list = [str(key).strip() for key in parsed if key]
+            except json.JSONDecodeError:
+                pass
+    
+    # Parse db_uris as list
+    db_uri_list = []
+    if db_uris:
+        if isinstance(db_uris, list):
+            db_uri_list = [str(uri).strip() for uri in db_uris if uri]
+        elif isinstance(db_uris, str):
+            try:
+                parsed = json.loads(db_uris)
+                if isinstance(parsed, list):
+                    db_uri_list = [str(uri).strip() for uri in parsed if uri]
+                else:
+                    db_uri_list = [db_uris.strip()]
+            except json.JSONDecodeError:
+                db_uri_list = [uri.strip() for uri in db_uris.split(",") if uri.strip()]
+
+    # Parse website_urls as list            
+    website_url_list = []
+    if website_urls:
+        if isinstance(website_urls, list):
+            website_url_list = [str(url).strip() for url in website_urls if url]
+        elif isinstance(website_urls, str):
+            try:
+                parsed = json.loads(website_urls)
+                if isinstance(parsed, list):
+                    website_url_list = [str(url).strip() for url in parsed if url]
+                else:
+                    website_url_list = [website_urls.strip()]
+            except json.JSONDecodeError:
+                website_url_list = [url.strip() for url in website_urls.split(",") if url.strip()]
+    
+    # Create job
+    job_manager = JobManager(get_pool())
+    job_id = job_manager.create_job(
+        company_name=company_name,
+        metadata={
+            "s3_files": len(s3_file_keys_list),
+            "databases": len(db_uri_list),
+            "websites": len(website_url_list),
+            "has_zoho": bool(zoho_cred_encrypted)
+        }
+    )
+    
+    # Schedule background task
+    background_tasks.add_task(
+        run_ingestion_pipeline,
+        job_id=job_id,
+        company_name=company_name,
+        company_directory=company_directory,
+        s3_file_keys_list=s3_file_keys_list,
+        zoho_cred_encrypted=zoho_cred_encrypted,
+        zoho_region=zoho_region,
+        db_uri_list=db_uri_list,
+        website_url_list=website_url_list
+    )
+    
+    logger.info(f"✅ Created job {job_id} for {company_name}")
+    
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "accepted",
+            "job_id": job_id,
+            "company_name": company_name,
+            "message": f"Ingestion job created. Check status at /data-ingestion/jobs/{job_id}/status",
+            "check_status_url": f"/data-ingestion/jobs/{job_id}/status"
+        }
+    )
+
+
+@router.get("/jobs/{job_id}/status")
+async def get_job_status(job_id: str):
+    """Get status of an ingestion job"""
+    job_manager = JobManager(get_pool())
+    job_data = job_manager.get_job_status(job_id)
+    
+    if not job_data:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    
+    return JSONResponse(status_code=200, content=job_data)
+
+
+@router.get("/companies/{company_name}/files")
+async def get_company_files(company_name: str):
+    """Get all processed files for a company"""
+    pool = get_pool()
+    conn = None
+    
+    try:
+        conn = pool.getconn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT file_path, file_hash, file_type, file_size, 
+                       vector_count, job_id, processed_at
+                FROM processed_files
+                WHERE company_name = %s
+                ORDER BY processed_at DESC
+            """, (company_name,))
+            
+            rows = cur.fetchall()
+            files = [
+                {
+                    "file_path": row[0],
+                    "file_hash": row[1],
+                    "file_type": row[2],
+                    "file_size": row[3],
+                    "vector_count": row[4],
+                    "job_id": row[5],
+                    "processed_at": row[6].isoformat() if row[6] else None
+                }
+                for row in rows
+            ]
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "company_name": company_name,
+                    "total_files": len(files),
+                    "files": files
+                }
+            )
+    finally:
+        if conn:
+            pool.putconn(conn)
+
+
+@router.get("/companies/{company_name}/websites")
+async def get_company_websites(company_name: str):
+    """Get all processed websites for a company"""
+    pool = get_pool()
+    conn = None
+    
+    try:
+        conn = pool.getconn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT website_url, content_hash, page_count, 
+                       vector_count, job_id, processed_at
+                FROM processed_websites
+                WHERE company_name = %s
+                ORDER BY processed_at DESC
+            """, (company_name,))
+            
+            rows = cur.fetchall()
+            websites = [
+                {
+                    "website_url": row[0],
+                    "content_hash": row[1],
+                    "page_count": row[2],
+                    "vector_count": row[3],
+                    "job_id": row[4],
+                    "processed_at": row[5].isoformat() if row[5] else None
+                }
+                for row in rows
+            ]
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "company_name": company_name,
+                    "total_websites": len(websites),
+                    "websites": websites
+                }
+            )
+    finally:
+        if conn:
+            pool.putconn(conn)
+    
+@router.get("/companies/{company_name}/databases")
+async def get_company_databases(company_name: str):
+    """Get all processed databases for a company"""
+    pool = get_pool()
+    conn = None
+    
+    try:
+        conn = pool.getconn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT db_uri, db_hash, db_type, db_name,
+                       vector_count, job_id, processed_at
+                FROM processed_databases
+                WHERE company_name = %s
+                ORDER BY processed_at DESC
+            """, (company_name,))
+            
+            rows = cur.fetchall()
+            databases = [
+                {
+                    "db_uri": row[0],
+                    "db_hash": row[1],
+                    "db_type": row[2],
+                    "db_name": row[3],
+                    "vector_count": row[4],
+                    "job_id": row[5],
+                    "processed_at": row[6].isoformat() if row[6] else None
+                }
+                for row in rows
+            ]
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "company_name": company_name,
+                    "total_databases": len(databases),
+                    "databases": databases
+                }
+            )
+    finally:
+        if conn:
+            pool.putconn(conn)
+
+
+# ✅ NEW: Get processed Zoho reports endpoint
+@router.get("/companies/{company_name}/zoho-reports")
+async def get_company_zoho_reports(company_name: str):
+    """Get all processed Zoho reports for a company"""
+    pool = get_pool()
+    conn = None
+    
+    try:
+        conn = pool.getconn()
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT report_name, app_name, content_hash, record_count,
+                       vector_count, job_id, processed_at
+                FROM processed_zoho_reports
+                WHERE company_name = %s
+                ORDER BY processed_at DESC
+            """, (company_name,))
+            
+            rows = cur.fetchall()
+            reports = [
+                {
+                    "report_name": row[0],
+                    "app_name": row[1],
+                    "content_hash": row[2],
+                    "record_count": row[3],
+                    "vector_count": row[4],
+                    "job_id": row[5],
+                    "processed_at": row[6].isoformat() if row[6] else None
+                }
+                for row in rows
+            ]
+            
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "company_name": company_name,
+                    "total_reports": len(reports),
+                    "zoho_reports": reports
+                }
+            )
+    finally:
+        if conn:
+            pool.putconn(conn)

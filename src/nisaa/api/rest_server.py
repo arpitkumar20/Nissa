@@ -1,3 +1,5 @@
+import json
+import os
 import uvicorn
 import logging
 from datetime import datetime
@@ -8,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 
 # Existing routers
-from nisaa.graphs.node import get_rag_engine
+from src.nisaa.graphs.node import get_rag_engine
 from src.nisaa.api.ingestion_router import router as ingestion_router
 
 # New RAG router
@@ -22,6 +24,26 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Utility: Load Namespace from web_info.json
+# ============================================================================
+def load_namespace() -> str:
+    """Load company namespace from web_info/web_info.json"""
+    folder_path = "web_info"
+    filename = "web_info.json"
+    file_path = os.path.join(folder_path, filename)
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                namespace = data.get("namespace") or data.get("company_namespace")
+                if namespace:
+                    return namespace
+            except Exception as e:
+                logger.error(f"Error loading namespace from file: {e}")
+    logger.error("Namespace not found, defaulting to 'default'")
+    return "default"
 
 
 # ============================================================================
@@ -49,8 +71,9 @@ async def lifespan(app: FastAPI):
 
     # Initialize RAG Engine (Optional - can continue without it)
     try:
+        namespace = load_namespace()
         logger.info("🤖 Initializing RAG Engine...")
-        get_rag_engine()
+        get_rag_engine(namespace)
         logger.info("✅ RAG Engine pre-loaded successfully")
     except Exception as e:
         logger.error(f"❌ RAG Engine initialization failed: {e}")
@@ -121,7 +144,8 @@ async def detailed_health_check() -> Dict[str, Any]:
     # Check RAG engine status
     rag_status = "not_initialized"
     try:
-        engine = get_rag_engine()
+        namespace = load_namespace()
+        engine = get_rag_engine(namespace)
         if engine:
             rag_status = "healthy"
     except Exception as e:

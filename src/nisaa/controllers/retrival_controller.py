@@ -1,3 +1,14 @@
+"""
+Hybrid RAG Query Engine - FIXED VERSION
+
+✅ Key Changes:
+1. Removed dependency on web_info.json file
+2. Namespace MUST be passed as parameter (no defaults)
+3. Better error handling for missing namespace
+4. Thread-safe per-request instantiation
+5. Cleaner initialization flow
+"""
+
 import json
 import os
 import re
@@ -18,7 +29,8 @@ from pinecone import Pinecone as PineconeClient
 load_dotenv()
 
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, 
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -30,8 +42,6 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX", "nisaa-knowledge")
-#NAMESPACE = os.getenv("NAMESPACE", "IHI-MEDICAL-CAMP") 
-#file read and set on namespace
 
 # Retrieval Configuration
 TOP_K = int(os.getenv("TOP_K", "5"))
@@ -46,13 +56,15 @@ SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.65"))
 class HybridRAGQueryEngine:
     """
     Enhanced RAG Engine with Hybrid Search for LangGraph
-    Thread-safe and optimized for production use
+    
+    ✅ FIXED: Thread-safe and designed for per-request instantiation
+    No longer uses singleton pattern or file reading
     """
 
     def __init__(
         self,
+        namespace: str,  # ✅ REQUIRED: No default value
         pinecone_index_name: str = PINECONE_INDEX_NAME,
-        namespace: str = None,
         embedding_model: str = EMBEDDING_MODEL,
         llm_model: str = LLM_MODEL,
         top_k: int = TOP_K,
@@ -60,36 +72,52 @@ class HybridRAGQueryEngine:
         temperature: float = 0.7,
         max_tokens: int = 2000,
     ):
-        print("================================retrival namespace for query ============================================================")
-        namespaces_file="web_info/web_info.json"
-        if not os.path.exists(namespaces_file):
-            raise FileNotFoundError(f"JSON file not found: {namespaces_file}")
+        """
+        Initialize Hybrid RAG Query Engine
+        
+        ✅ CRITICAL FIX: Namespace is now REQUIRED parameter
+        
+        Args:
+            namespace: Company-specific namespace (MUST be provided)
+            pinecone_index_name: Pinecone index name
+            embedding_model: OpenAI embedding model
+            llm_model: OpenAI LLM model
+            top_k: Number of documents to retrieve
+            similarity_threshold: Minimum similarity score
+            temperature: LLM temperature
+            max_tokens: Max tokens in response
+            
+        Raises:
+            ValueError: If namespace is None or empty
+        """
+        
+        # ✅ CRITICAL: Validate namespace
+        if not namespace:
+            raise ValueError(
+                "Namespace is REQUIRED and cannot be None or empty. "
+                "Pass company_namespace from GraphState."
+            )
 
-        with open(namespaces_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-            namespace = data.get("namespace")
-        print(namespace)
-        print("============================================================================================")
-
-        """Initialize Hybrid RAG Query Engine"""
-        self.pinecone_index_name = pinecone_index_name
         self.namespace = namespace
+        self.pinecone_index_name = pinecone_index_name
         self.top_k = top_k
         self.similarity_threshold = similarity_threshold
 
+        logger.info(f"Initializing RAG Engine for namespace: '{namespace}'")
+
         # Initialize embeddings
-        logger.info(f"Initializing embeddings: {embedding_model}")
+        logger.info(f"  - Embedding model: {embedding_model}")
         self.embeddings = OpenAIEmbeddings(
-            model=embedding_model, openai_api_key=OPENAI_API_KEY
+            model=embedding_model, 
+            openai_api_key=OPENAI_API_KEY
         )
 
         # Initialize Pinecone client
-        logger.info(f"Connecting to Pinecone: {pinecone_index_name}")
+        logger.info(f"  - Pinecone index: {pinecone_index_name}")
         self.pc = PineconeClient(api_key=PINECONE_API_KEY)
         
         # Initialize vector store using langchain-pinecone
-        logger.info(f"Initializing vector store: {namespace}")
+        logger.info(f"  - Vector store namespace: {namespace}")
         self.vectorstore = PineconeVectorStore(
             index_name=pinecone_index_name,
             embedding=self.embeddings,
@@ -100,7 +128,7 @@ class HybridRAGQueryEngine:
         self.index = self.pc.Index(pinecone_index_name)
 
         # Initialize LLM
-        logger.info(f"Initializing LLM: {llm_model}")
+        logger.info(f"  - LLM model: {llm_model}")
         self.llm = ChatOpenAI(
             model=llm_model,
             temperature=temperature,
@@ -108,7 +136,7 @@ class HybridRAGQueryEngine:
             openai_api_key=OPENAI_API_KEY,
         )
 
-        logger.info("✅ Hybrid RAG Engine initialized")
+        logger.info(f"✅ RAG Engine initialized for namespace '{namespace}'")
 
     # ========================================================================
     # ID DETECTION AND EXTRACTION
@@ -232,15 +260,14 @@ class HybridRAGQueryEngine:
                         "original_query": query,
                     }
 
-        logger.info("🔎 No ID/Phone - using semantic search")
+        logger.info("🔎 No ID/Phone detected - using semantic search")
         return {
             "is_id_query": False,
             "id_type": None,
             "id_value": None,
             "original_query": query,
         }
- 
- 
+
     # ========================================================================
     # HYBRID RETRIEVAL
     # ========================================================================
@@ -259,7 +286,7 @@ class HybridRAGQueryEngine:
         Returns:
             List of Document objects
         """
-        logger.info(f"🎯 Exact ID Search: {id_type} = {id_value}")
+        logger.info(f"🎯 Exact ID Search: {id_type} = {id_value} in namespace '{self.namespace}'")
 
         try:
             # Generate query embedding
@@ -310,11 +337,12 @@ class HybridRAGQueryEngine:
         Returns:
             List of Document objects
         """
-        logger.info(f"🔎 Semantic Search: {query[:100]}")
+        logger.info(f"🔎 Semantic Search: {query[:100]} in namespace '{self.namespace}'")
 
         try:
             retriever = self.vectorstore.as_retriever(
-                search_type="similarity", search_kwargs={"k": top_k}
+                search_type="similarity", 
+                search_kwargs={"k": top_k}
             )
 
             docs = retriever.invoke(query)

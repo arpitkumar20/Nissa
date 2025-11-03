@@ -163,3 +163,60 @@ class DocumentLoader:
                 if file.lower().endswith('.json'):
                     json_files.append(os.path.join(root, file))
         return json_files
+    
+    def load_specific_files(self, file_paths: List[str]) -> List[Document]:
+        """
+        Load only specific files by their paths
+        
+        Args:
+            file_paths: List of absolute file paths to load
+        
+        Returns:
+            List of Document objects
+        """
+        logger.info(f"📁 Loading {len(file_paths)} specific files")
+        
+        documents = []
+        
+        for file_path in file_paths:
+            if not os.path.exists(file_path):
+                logger.warning(f"File not found: {file_path}")
+                continue
+                
+            file_ext = os.path.splitext(file_path)[1].lower()
+            
+            try:
+                # Map extensions to loaders
+                if file_ext == '.pdf':
+                    loader = PyMuPDFLoader(file_path)
+                elif file_ext == '.txt':
+                    loader = TextLoader(file_path, encoding='utf-8')
+                elif file_ext == '.xml':
+                    loader = UnstructuredXMLLoader(file_path)
+                elif file_ext == '.csv':
+                    loader = CSVLoader(file_path)
+                elif file_ext == '.docx':
+                    loader = Docx2txtLoader(file_path)
+                elif file_ext in ['.xlsx', '.xls']:
+                    loader = UnstructuredExcelLoader(file_path)
+                elif file_ext == '.json':
+                    loader = JSONStringLoader(file_path)
+                else:
+                    logger.warning(f"Unsupported file type: {file_ext}")
+                    continue
+                
+                docs = loader.load()
+                documents.extend(docs)
+                logger.debug(f"Loaded {len(docs)} documents from {os.path.basename(file_path)}")
+                
+            except Exception as e:
+                logger.error(f"Error loading {file_path}: {e}")
+                continue
+        
+        # Add metadata
+        for doc in documents:
+            doc.metadata["company_namespace"] = self.company_namespace
+            doc.metadata["source_type"] = "file"
+        
+        logger.info(f"✅ Successfully loaded {len(documents)} documents from {len(file_paths)} files")
+        return documents
