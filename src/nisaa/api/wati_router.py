@@ -4,19 +4,50 @@ import logging
 import os
 import time
 from typing import Optional, Dict, Any
+from pathlib import Path
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from ..models.chat_manager import ChatManager
 import base64
-
 from src.nisaa.services.wati_api_service import contect_list, send_whatsapp_message_v2, get_contact_messages
+from fastapi.templating import Jinja2Templates
+from src.nisaa.services.wati_api_service import send_whatsapp_message_v2
 from ..models.db_operations import initialize_and_save_booking,delete_booking
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+from pathlib import Path
+from fastapi.templating import Jinja2Templates
 
+# ... (other imports) ...
+logger = logging.getLogger(__name__)
+
+try:
+    # 1. Get the path of the current file (wati_router.py)
+    #    e.g., /home/sohag/Nisaa_main/Nissa/src/nisaa/api/wati_router.py
+    current_file = Path(__file__).resolve()
+
+    # 2. Get the directory of the current file (api/)
+    #    e.g., /home/sohag/Nisaa_main/Nissa/src/nisaa/api
+    api_dir = current_file.parent
+
+    # 3. Get the parent of that (src/nisaa/)
+    #    e.g., /home/sohag/Nisaa_main/Nissa/src/nisaa
+    base_dir = api_dir.parent
+
+    # 4. Join it with your 'templates' folder
+    #    e.g., /home/sohag/Nisaa_main/Nissa/src/nisaa/templates
+    TEMPLATE_DIR = base_dir / "templates"
+    
+    templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+    logger.info(f"Templates directory successfully set to: {TEMPLATE_DIR}")
+
+except Exception as e:
+    logger.error(f"CRITICAL: Failed to initialize Jinja2Templates: {e}")
+    logger.error(f"Calculated path was: {TEMPLATE_DIR}")
+    templates = None
 # ============================================================================
 # Request/Response Models
 # ============================================================================
@@ -325,12 +356,16 @@ async def confirm_booking(request: Request):
         print(f"  Date: {date}")
         print(f"  Slot: {time_slot}")
         
-        return initialize_and_save_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot,status="success")
-
+        booking_id,error=initialize_and_save_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot,status="success")
+        context = {"request": request}
+        if not error:
+           return templates.TemplateResponse("booking_success.html",context)
+        else:
+           return templates.TemplateResponse("booking_not_successful.html",context)
     except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
         # This will catch bad Base64, splitting errors, or bad UTF-8
         print(f"Error: Received a malformed or invalid booking link: {e}")
-        return {"status": "error", "message": "Invalid or expired booking link.Please try to book appoinment again."}
+        return templates.TemplateResponse("booking_not_successful.html",context)
 
 @router.get("/wati/booking/cancel",summary="When User click [CANCEL] , this api will be called" )
 async def cancel_booking(request: Request):
@@ -367,32 +402,38 @@ async def cancel_booking(request: Request):
         print(f"  Date: {date}")
         print(f"  Slot: {time_slot}")
         
-        return delete_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot)
+        row_number,error=delete_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot)
+        context = {"request": request}
+        if row_number:
+            return templates.TemplateResponse("cancel_successful.html",context)
+        else:
+            return templates.TemplateResponse("cancel_unsucessfull.html",context)
 
     except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
         # This will catch bad Base64, splitting errors, or bad UTF-8
         print(f"Error: Received a malformed or invalid booking link: {e}")
-        return {"status": "error", "message": "Invalid or expired booking link.Please try to book appoinment again."}
+        return templates.TemplateResponse("cancel_unsucessfull_isuue.html",context)
+
 
 
 @router.get("/wati/contact/list", summary="WATI router contact list")
 async def wati_contact_list():
     contact_list = contect_list()
-    
     return {
         "messages": "All contacts fetched successfully",
         "contact_list": contact_list,
     }
-
-
+ 
+ 
 @router.post("/wati/chat/list", summary="WATI router chat list")
 async def wati_contact_chat_list(request: Request):
     data = await request.json()
-
+ 
     whatsapp_number = data.get("whatsapp_number")
     chat_list = get_contact_messages(whatsapp_number)
-    
+
     return {
         "messages": "All chats fetched successfully",
         "contact_list": chat_list,
     }
+ 

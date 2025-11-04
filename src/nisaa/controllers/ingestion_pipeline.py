@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
 from tqdm import tqdm
 
-from nisaa.controllers.file_deduplication import WebsiteDeduplicator,DBDeduplicator
+from src.nisaa.controllers.file_deduplication import WebsiteDeduplicator,DBDeduplicator
 from src.nisaa.helpers.logger import logger
 from src.nisaa.services.embedding_service import EmbeddingService
 from src.nisaa.services.json_processor import JSONProcessor
