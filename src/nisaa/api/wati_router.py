@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from ..models.chat_manager import ChatManager
 import base64
-
+from src.nisaa.services.wati_api_service import contect_list, send_whatsapp_message_v2, get_contact_messages
 from fastapi.templating import Jinja2Templates
 from src.nisaa.services.wati_api_service import send_whatsapp_message_v2
 from ..models.db_operations import initialize_and_save_booking,delete_booking
@@ -413,3 +413,27 @@ async def cancel_booking(request: Request):
         # This will catch bad Base64, splitting errors, or bad UTF-8
         print(f"Error: Received a malformed or invalid booking link: {e}")
         return templates.TemplateResponse("cancel_unsucessfull_isuue.html",context)
+
+
+
+@router.get("/wati/contact/list", summary="WATI router contact list")
+async def wati_contact_list():
+    contact_list = contect_list()
+    return {
+        "messages": "All contacts fetched successfully",
+        "contact_list": contact_list,
+    }
+ 
+ 
+@router.post("/wati/chat/list", summary="WATI router chat list")
+async def wati_contact_chat_list(request: Request):
+    data = await request.json()
+ 
+    whatsapp_number = data.get("whatsapp_number")
+    chat_list = get_contact_messages(whatsapp_number)
+
+    return {
+        "messages": "All chats fetched successfully",
+        "contact_list": chat_list,
+    }
+ 
