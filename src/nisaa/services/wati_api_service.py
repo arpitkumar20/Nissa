@@ -4,6 +4,7 @@ import os
 import requests
 import logging
 from urllib.parse import unquote
+from datetime import datetime, timezone, timedelta
 
 # Load environment variables
 WATI_APY_KEY = os.getenv("WATI_APY_KEY")
@@ -182,4 +183,120 @@ def send_whatsapp_template_message(
             return {"error": f"Status code {response.status_code}", "response": response.text}
     except requests.exceptions.RequestException as e:
         logger.exception(f"Exception occurred while sending template message: {e}")
+        return {"error": str(e)}
+
+
+def contect_list():
+    url = f"{BASE_URL}/{TENANT_ID}/api/v1/getContacts"
+    headers = {
+    'accept': '*/*',
+    'Authorization': f'Bearer {WATI_APY_KEY}',
+    }
+
+    print(f"Fetching all contacts processing is started")
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            contacts = response.json()
+            if "contact_list" in contacts:
+                contacts = [
+                    {
+                        "wAid": contact.get("wAid"),
+                        "firstName": contact.get("firstName"),
+                        "fullName": contact.get("fullName"),
+                        "phone": contact.get("phone")
+                    }
+                    for contact in contacts["contact_list"]
+                    if contact.get("contactStatus") == "VALID"
+                ]
+                
+                print("All contacts fetched successfully")
+                return contacts
+            else:
+                print("No contact list found in response")
+                return []
+        else:
+            print(f"Failed to contact fetched. Status code: {response.status_code}, Response: {response.text}")
+            return {"error": f"Status code {response.status_code}", "response": response.text}
+    except requests.exceptions.RequestException as e:
+        print(f"Exception occurred while contact fetched: {e}")
+        return {"error": str(e)}
+
+def get_contact_messages(whatsapp_number: str):
+    page_size = 100
+    page_number = 1
+    all_messages = []
+
+    url = f"{BASE_URL}/{TENANT_ID}/api/v1/getMessages/{whatsapp_number}?channelPhoneNumber={CHANNEL_NUMBER}&pageSize={page_size}&pageNumber={page_number}"
+    headers = {
+        "accept": "*/*",
+        "Authorization": f"Bearer {WATI_APY_KEY}",
+    }
+
+    print("Fetching all messages started...")
+
+    try:
+        # Get current date in IST
+        IST = timezone(timedelta(hours=5, minutes=30))
+        current_date = datetime.now(IST).date()
+
+        while url:
+            response = requests.get(url, headers=headers)
+
+            if response.status_code != 200:
+                print(f"Failed to fetch messages (HTTP {response.status_code}): {response.text}")
+                break
+
+            data = response.json()
+            messages_data = data.get("messages", {})
+
+            items = messages_data.get("items", [])
+            if not items:
+                print("No message items found on this page.")
+                break
+
+            page_messages = []
+            for msg in items:
+                created_time = msg.get("created")
+                if not created_time:
+                    continue
+
+                try:
+                    # Convert UTC to IST
+                    msg_datetime_utc = datetime.fromisoformat(created_time.replace("Z", "+00:00"))
+                    msg_datetime_ist = msg_datetime_utc.astimezone(IST)
+                except Exception:
+                    continue
+
+                # Filter only today's messages (IST date)
+                if msg_datetime_ist.date() == current_date:
+                    if msg.get("statusString") == 'SENT' or msg.get('type') == 'text':
+                        page_messages.append({
+                            "text": msg.get("text"),
+                            "id": msg.get('id'),
+                            "eventType": msg.get("eventType"),
+                            "statusString": msg.get("statusString"),
+                            # Format the time in readable IST format
+                            "created": msg_datetime_ist.strftime("%Y-%m-%d %I:%M:%S %p"),
+                            "conversationId": msg.get("conversationId"),
+                            "ticketId": msg.get('ticketId')
+                        })
+
+            all_messages.extend(page_messages)
+            print(f"✅ Fetched {len(page_messages)} messages from page {page_number} (today only)")
+
+            link_info = data.get("link", {})
+            next_page_url = link_info.get("nextPage")
+
+            if next_page_url:
+                url = next_page_url
+                page_number += 1
+            else:
+                print("All chat pages fetched successfully.")
+                break
+
+        return all_messages
+
+    except requests.exceptions.RequestException as e:
+        print(f"Request exception occurred: {e}")
         return {"error": str(e)}
