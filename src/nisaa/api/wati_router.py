@@ -1,14 +1,17 @@
 import asyncio
+import json
 import logging
+import os
 import time
 from typing import Optional, Dict, Any
 from fastapi import APIRouter, Request, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from ..models.chat_manager import ChatManager
+import base64
 
-from src.nisaa.graphs.graph import execute_rag_pipeline
 from src.nisaa.services.wati_api_service import send_whatsapp_message_v2
-
+from ..models.db_operations import initialize_and_save_booking,delete_booking
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -38,11 +41,59 @@ class WebhookResponse(BaseModel):
 
 
 # ============================================================================
+# Namespace Management
+# ============================================================================
+
+
+def get_company_namespace() -> str:
+    """
+    IMPROVED: Get company namespace from environment or configuration
+    
+    Priority:
+    1. Environment variable (for production)
+    2. Config file (for local development)
+    3. Raise error if none found
+    
+    Returns:
+        Company namespace string
+        
+    Raises:
+        HTTPException: If no namespace configured
+    """
+    # Option 1: From environment variable (RECOMMENDED for production)
+    namespace = os.getenv("COMPANY_NAMESPACE")
+    if namespace:
+        logger.info(f"Using namespace from environment: {namespace}")
+        return namespace
+    
+    # Option 2: From config file (for local development)
+    config_file = "web_info/web_info.json"
+    if os.path.exists(config_file):
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                namespace = data.get("namespace")
+                if namespace:
+                    logger.info(f"Using namespace from config file: {namespace}")
+                    return namespace
+        except Exception as e:
+            logger.error(f"Error reading config file: {e}")
+    
+    # Option 3: No namespace found - FAIL
+    error_msg = (
+        "No company namespace configured. Please set COMPANY_NAMESPACE environment variable "
+        "or ensure web_info/web_info.json exists with 'namespace' field."
+    )
+    logger.error(f"{error_msg}")
+    raise HTTPException(status_code=500, detail=error_msg)
+
+
+# ============================================================================
 # Background Task Handlers
 # ============================================================================
 
 
-async def process_and_send_response(phone: str, text: str, request_id: str):
+async def process_and_send_response(phone: str, text: str, request_id: str, bot: ChatManager):    
     """
     Background task to process query and send WhatsApp response
 
@@ -50,44 +101,33 @@ async def process_and_send_response(phone: str, text: str, request_id: str):
         phone: User's phone number
         text: User's message
         request_id: Unique request identifier for tracking
+        company_namespace: Company-specific namespace
     """
     start_time = time.time()
 
     try:
         logger.info(f"[{request_id}] Processing message from {phone}")
+        # logger.info(f"[{request_id}] Namespace: {company_namespace}")
 
-        # Execute RAG pipeline
-        result = await asyncio.to_thread(
-            execute_rag_pipeline, user_query=text, user_phone_number=phone
+        # FIX: Pass namespace to RAG pipeline
+        ai_reply = await asyncio.to_thread(
+            bot.get_response,
+            mobile_number=phone, 
+            user_prompt=text
         )
 
         # Extract response
-        agent_reply = result.get("model_response", "")
-
-        if not agent_reply:
-            agent_reply = (
-                "I apologize, but I couldn't generate a response. Please try again."
-            )
-            logger.warning(f"[{request_id}] Empty response from RAG pipeline")
-
-        print(agent_reply)
-
-        # Log pipeline results
+        logger.info(f"[{request_id}] Bot generated reply: {ai_reply[:100]}...")
         processing_time = time.time() - start_time
-        logger.info(f"[{request_id}] Pipeline completed in {processing_time:.2f}s:")
-        logger.info(f"  • Search Type: {result.get('search_type', 'unknown')}")
-        logger.info(f"  • Documents: {result.get('num_documents', 0)}")
-        logger.info(f"  • Response Length: {len(agent_reply)} chars")
+        logger.info(f"[{request_id}] Pipeline completed in {processing_time:.2f}s")
 
-        if result.get("error"):
-            logger.error(f"[{request_id}] Pipeline error: {result['error']}")
 
-        #Send WhatsApp message
+        # Send WhatsApp message
         try:
-            await asyncio.to_thread(send_whatsapp_message_v2, phone, agent_reply)
-            logger.info(f"[{request_id}] ✅ WhatsApp message sent successfully")
+            await asyncio.to_thread(send_whatsapp_message_v2, phone, ai_reply)
+            logger.info(f"[{request_id}] WhatsApp message sent successfully")
         except Exception as e:
-            logger.error(f"[{request_id}] ❌ Failed to send WhatsApp message: {e}")
+            logger.error(f"[{request_id}] Failed to send WhatsApp message: {e}")
             # Try to send error message
             try:
                 error_msg = "I apologize, but I encountered an issue sending the response. Please try again."
@@ -96,7 +136,7 @@ async def process_and_send_response(phone: str, text: str, request_id: str):
                 pass
 
     except Exception as e:
-        logger.error(f"[{request_id}] ❌ Background task failed: {e}", exc_info=True)
+        logger.error(f"[{request_id}] Background task failed: {e}", exc_info=True)
 
         # Try to send error message to user
         try:
@@ -120,19 +160,26 @@ async def process_and_send_response(phone: str, text: str, request_id: str):
 async def wati_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Handle incoming WhatsApp messages from WATI
+    
+    IMPROVED: Better error handling and namespace management
 
     Flow:
     1. Receive and validate webhook payload
-    2. Schedule RAG pipeline processing (background task)
-    3. Return immediate acknowledgment
-    4. Process query and send response asynchronously
+    2. Get company namespace from config/env
+    3. Schedule RAG pipeline processing (background task)
+    4. Return immediate acknowledgment
+    5. Process query and send response asynchronously
 
     Returns:
         JSON response with status
     """
     request_id = str(int(time.time() * 1000))  # Unique request ID
     start_time = time.time()
-
+    try:
+        bot = request.app.state.bot
+    except AttributeError:
+        logger.error("'bot' not found in app.state. Check lifespan startup.")
+        raise HTTPException(status_code=500, detail="Bot is not initialized.")    
     try:
         # Parse webhook payload
         data = await request.json()
@@ -140,6 +187,7 @@ async def wati_webhook(request: Request, background_tasks: BackgroundTasks):
 
         # Extract and validate required fields
         phone = data.get("waId")
+        # print(phone)
         text = data.get("text")
         event_type = data.get("eventType", "message")
         message_type = data.get("messageType", "text")
@@ -180,13 +228,14 @@ async def wati_webhook(request: Request, background_tasks: BackgroundTasks):
 
         # Log request details
         logger.info(f"[{request_id}] Processing message:")
-        logger.info(f"  • Phone: {phone}")
-        logger.info(f"  • Text: {text[:100]}{'...' if len(text) > 100 else ''}")
-        logger.info(f"  • Event Type: {event_type}")
-        logger.info(f"  • Message Type: {message_type}")
+        logger.info(f"Phone: {phone}")
+        logger.info(f"Text: {text[:100]}{'...' if len(text) > 100 else ''}")
+        logger.info(f"Event Type: {event_type}")
+        logger.info(f"Message Type: {message_type}")
+        # logger.info(f"  • Namespace: {company_namespace}")
 
         # Schedule background processing
-        background_tasks.add_task(process_and_send_response, phone, text, request_id)
+        background_tasks.add_task(process_and_send_response, phone, text, request_id, bot)
 
         # Return immediate acknowledgment
         response_time = time.time() - start_time
@@ -198,6 +247,7 @@ async def wati_webhook(request: Request, background_tasks: BackgroundTasks):
                 "status": "success",
                 "message": "Message received and processing",
                 "phone": phone,
+                # "namespace": company_namespace,
                 "processing_time": round(response_time, 3),
             },
         )
@@ -218,14 +268,108 @@ async def wati_webhook(request: Request, background_tasks: BackgroundTasks):
 @router.get("/wati/health", summary="WATI router health check")
 async def wati_health():
     """Health check for WATI router"""
+    try:
+        # Check namespace configuration
+        namespace = get_company_namespace()
+        namespace_status = "configured"
+    except:
+        namespace = None
+        namespace_status = "missing"
+    
     return {
         "status": "healthy",
         "service": "WATI WhatsApp Router",
+        "namespace": namespace,
+        "namespace_status": namespace_status,
         "features": [
             "Agentic RAG",
             "Hybrid Search",
-            "Chat History",
+            "Conditional History Loading",
+            "Uncertainty-based Retry",
             "Background Processing",
         ],
     }
- 
+
+@router.get("/wati/template", summary="When User click [BOOK], this api will be called")
+async def confirm_booking(request: Request):
+    params = request.query_params
+    
+    # 1. Get the encoded string from the 'phone' parameter
+    encoded_string = params.get("phone")
+
+    if not encoded_string:
+        return {"status": "error", "message": "Missing required data."}
+
+    try:
+        # 2. Decode the URL-safe Base64 string back into bytes
+        # We add padding '=' just in case, and encode to utf-8
+        padding_needed = 4 - (len(encoded_string) % 4)
+        if padding_needed != 4:
+            encoded_string += "=" * padding_needed
+            
+        decoded_bytes = base64.urlsafe_b64decode(encoded_string.encode('utf-8'))
+        
+        # 3. Decode the bytes back into your original composite string
+        composite_string = decoded_bytes.decode('utf-8')
+        # e.g., "918...-DrEmily---2025-11-03----10:00AM"
+
+        # 4. Now you can safely split the decoded string
+        part1, time_slot = composite_string.split('----', 1)
+        part2, date = part1.split('---', 1)
+        phone_number, doctor_name = part2.split('-', 1)
+
+        # 5. You have all your data!
+        print(f"Successfully Decoded and Parsed:")
+        print(f"  Phone: {phone_number}")
+        print(f"  Doctor: {doctor_name}")
+        print(f"  Date: {date}")
+        print(f"  Slot: {time_slot}")
+        
+        return initialize_and_save_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot,status="success")
+
+    except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
+        # This will catch bad Base64, splitting errors, or bad UTF-8
+        print(f"Error: Received a malformed or invalid booking link: {e}")
+        return {"status": "error", "message": "Invalid or expired booking link.Please try to book appoinment again."}
+
+@router.get("/wati/booking/cancel",summary="When User click [CANCEL] , this api will be called" )
+async def cancel_booking(request: Request):
+    params = request.query_params
+    
+    # 1. Get the encoded string from the 'phone' parameter
+    encoded_string = params.get("phone")
+
+    if not encoded_string:
+        return {"status": "error", "message": "Missing required data."}
+
+    try:
+        # 2. Decode the URL-safe Base64 string back into bytes
+        # We add padding '=' just in case, and encode to utf-8
+        padding_needed = 4 - (len(encoded_string) % 4)
+        if padding_needed != 4:
+            encoded_string += "=" * padding_needed
+            
+        decoded_bytes = base64.urlsafe_b64decode(encoded_string.encode('utf-8'))
+        
+        # 3. Decode the bytes back into your original composite string
+        composite_string = decoded_bytes.decode('utf-8')
+        # e.g., "918...-DrEmily---2025-11-03----10:00AM"
+
+        # 4. Now you can safely split the decoded string
+        part1, time_slot = composite_string.split('----', 1)
+        part2, date = part1.split('---', 1)
+        phone_number, doctor_name = part2.split('-', 1)
+
+        # 5. You have all your data!
+        print(f"Successfully Decoded and Parsed:")
+        print(f"  Phone: {phone_number}")
+        print(f"  Doctor: {doctor_name}")
+        print(f"  Date: {date}")
+        print(f"  Slot: {time_slot}")
+        
+        return delete_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot)
+
+    except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
+        # This will catch bad Base64, splitting errors, or bad UTF-8
+        print(f"Error: Received a malformed or invalid booking link: {e}")
+        return {"status": "error", "message": "Invalid or expired booking link.Please try to book appoinment again."}

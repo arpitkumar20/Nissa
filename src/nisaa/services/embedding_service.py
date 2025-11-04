@@ -1,11 +1,10 @@
 """
-Embedding generation service with parallel processing and rate limit handling
+Embedding generation service with SEQUENTIAL processing and rate limit handling
 """
 import os
 import time
 from typing import List
 from openai import OpenAI, RateLimitError
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 from src.nisaa.helpers.logger import logger
@@ -19,15 +18,35 @@ class EmbeddingService:
         self.langchain_embeddings = OpenAIEmbeddings(
             model=self.model,
             openai_api_key=self.api_key,
-            show_progress_bar=False
+            show_progress_bar=False,
+            max_retries=0  # CRITICAL: Disable LangChain's internal retry
         )
-        self.openai_client = OpenAI(api_key=self.api_key)
+        self.openai_client = OpenAI(
+            api_key=self.api_key,
+            max_retries=0  # CRITICAL: Disable OpenAI client's internal retry
+        )
+        
+        # Rate limiting configuration
+        self.min_batch_delay = float(os.getenv('MIN_BATCH_DELAY', '2.0'))  # 2 seconds between batches
+        self.last_request_time = 0
+    
+    def _rate_limit_delay(self):
+        """Enforce minimum delay between API requests"""
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        
+        if time_since_last < self.min_batch_delay:
+            sleep_time = self.min_batch_delay - time_since_last
+            logger.info(f"   ⏳ Rate limit delay: {sleep_time:.2f}s")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
     
     def _retry_with_exponential_backoff(
         self,
         func,
         max_retries: int = 5,
-        initial_delay: float = 1.0,
+        initial_delay: float = 5.0,  # INCREASED from 2.0 to 5.0 seconds
         backoff_factor: float = 2.0
     ):
         """
@@ -57,14 +76,18 @@ class EmbeddingService:
                     try:
                         # Try to extract wait time from error message
                         import re
-                        match = re.search(r'try again in (\d+)ms', error_msg)
+                        match = re.search(r'try again in (\d+\.?\d*)m?s', error_msg)
                         if match:
-                            wait_time = max(float(match.group(1)) / 1000, delay)
+                            extracted_time = float(match.group(1))
+                            # Check if it's milliseconds
+                            if 'ms' in error_msg:
+                                extracted_time = extracted_time / 1000
+                            wait_time = max(extracted_time, delay)
                     except:
                         pass
                 
                 logger.warning(
-                    f"Rate limit hit. Retry {attempt + 1}/{max_retries} "
+                    f"⚠️  Rate limit hit. Retry {attempt + 1}/{max_retries} "
                     f"after {wait_time:.2f}s"
                 )
                 time.sleep(wait_time)
@@ -77,60 +100,52 @@ class EmbeddingService:
         self,
         texts: List[str],
         batch_size: int = None,
-        max_workers: int = None
+        max_workers: int = None  # IGNORED - kept for backward compatibility
     ) -> List[List[float]]:
         """
-        Generate embeddings for document texts using parallel processing
+        Generate embeddings for document texts using SEQUENTIAL processing
         with rate limit handling
         
         Args:
             texts: List of text strings
-            batch_size: Batch size for processing (default: 25)
-            max_workers: Number of parallel workers (default: 3)
+            batch_size: Batch size for processing (default: 20)
+            max_workers: DEPRECATED - Sequential processing only
             
         Returns:
             List of embedding vectors
         """
-        # CRITICAL: Reduce these values to stay under rate limits
-        batch_size = batch_size or int(os.getenv('EMBEDDING_BATCH_SIZE', '25'))  # Reduced from 50
-        max_workers = max_workers or int(os.getenv('MAX_WORKERS', '3'))  # Reduced from 5
+        # CRITICAL: Smaller batches, NO parallel processing
+        batch_size = batch_size or int(os.getenv('EMBEDDING_BATCH_SIZE', '20'))
         
-        logger.info(f"🔢 Generating embeddings for {len(texts)} texts...")
+        logger.info(f"📢 Generating embeddings for {len(texts)} texts...")
         logger.info(f"   Using model: {self.model}")
-        logger.info(f"   Batch size: {batch_size}, Workers: {max_workers}")
+        logger.info(f"   Batch size: {batch_size} (SEQUENTIAL processing)")
         
         all_embeddings = []
         batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
         
-        def process_batch(batch_data):
-            batch_idx, batch = batch_data
+        # SEQUENTIAL processing - one batch at a time
+        for batch_idx, batch in enumerate(batches):
+            # Enforce rate limiting delay BEFORE making request
+            self._rate_limit_delay()
             
             def embed_batch():
                 vectors = self.langchain_embeddings.embed_documents(batch)
-                logger.info(f"   ✓ Batch {batch_idx + 1}/{len(batches)} completed")
                 return vectors
             
             try:
                 # Retry with exponential backoff on rate limit errors
                 vectors = self._retry_with_exponential_backoff(embed_batch)
-                return batch_idx, vectors
+                all_embeddings.extend(vectors)
+                
+                logger.info(
+                    f"   ✓ Batch {batch_idx + 1}/{len(batches)} completed "
+                    f"({len(all_embeddings)}/{len(texts)} embeddings)"
+                )
+                
             except Exception as e:
                 logger.error(f"   ✗ Batch {batch_idx + 1} failed: {e}")
                 raise
-        
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(process_batch, (idx, batch)): idx
-                for idx, batch in enumerate(batches)
-            }
-            
-            results = [None] * len(batches)
-            for future in as_completed(futures):
-                batch_idx, vectors = future.result()
-                results[batch_idx] = vectors
-        
-        for result in results:
-            all_embeddings.extend(result)
         
         logger.info(f"✅ Generated {len(all_embeddings)} embeddings")
         return all_embeddings
@@ -138,11 +153,11 @@ class EmbeddingService:
     def generate_for_json_chunks(
         self,
         chunks: List[str],
-        batch_size: int = 50  # Keep smaller batches for JSON
+        batch_size: int = 20  # Smaller batches for JSON
     ) -> List[List[float]]:
         """
         Generate embeddings for JSON chunks using OpenAI API directly
-        with rate limit handling
+        with SEQUENTIAL processing and rate limit handling
         
         Args:
             chunks: List of text chunks
@@ -151,12 +166,17 @@ class EmbeddingService:
         Returns:
             List of embedding vectors
         """
-        logger.info(f"🔢 Generating embeddings for {len(chunks)} JSON chunks...")
+        logger.info(f"📢 Generating embeddings for {len(chunks)} JSON chunks...")
         
         embeddings = []
+        num_batches = (len(chunks) + batch_size - 1) // batch_size
         
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i:i+batch_size]
+            batch_num = i // batch_size + 1
+            
+            # Enforce rate limiting delay BEFORE making request
+            self._rate_limit_delay()
             
             def embed_json_batch():
                 response = self.openai_client.embeddings.create(
@@ -170,10 +190,13 @@ class EmbeddingService:
                 batch_embeddings = self._retry_with_exponential_backoff(embed_json_batch)
                 embeddings.extend(batch_embeddings)
                 
-                logger.info(f"   ✓ Generated {len(embeddings)}/{len(chunks)} embeddings")
+                logger.info(
+                    f"   ✓ Batch {batch_num}/{num_batches} completed "
+                    f"({len(embeddings)}/{len(chunks)} embeddings)"
+                )
                 
             except Exception as e:
-                logger.error(f"✗ Error generating embeddings for batch {i//batch_size + 1}: {e}")
+                logger.error(f"✗ Error generating embeddings for batch {batch_num}: {e}")
                 # Add zero embeddings as fallback
                 embeddings.extend([[0.0] * 1536] * len(batch))
         
