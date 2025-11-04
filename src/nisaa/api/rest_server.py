@@ -7,7 +7,9 @@ from typing import Dict, Any
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
-
+from ..models.agent import create_stateless_agent
+from ..models.agent_context import PostgresChatHistory
+from ..models.chat_manager import ChatManager
 
 # Existing routers
 from src.nisaa.graphs.node import get_rag_engine
@@ -57,34 +59,48 @@ async def lifespan(app: FastAPI):
     Handle startup and shutdown events
     """
     # Startup
-    logger.info("🚀 Starting Nisaa API Server with Agentic RAG...")
+    logger.info("Starting Nisaa API Server with Agentic RAG...")
 
     # Initialize database tables (CRITICAL - must succeed)
     try:
-        logger.info("📊 Initializing database...")
-        initialize_db()
-        logger.info("✅ Database initialized successfully")
+        logger.info("Creating PostgresChatHistory...")
+        history_db = PostgresChatHistory()
+
+        logger.info("Creating Stateless Agent...")
+        stateless_agent = create_stateless_agent()
+
+        logger.info("Creating ChatManager...")
+        bot = ChatManager(agent=stateless_agent, history_manager=history_db)
+
+        app.state.bot = bot
+        logger.info("ChatManager Bot initialized and attached to app state.")
     except Exception as e:
-        logger.error(f"❌ Database initialization failed: {e}")
-        logger.error("🛑 Cannot start server without database. Exiting...")
+       logger.error(f"Bot initialization failed: {e}")
+    try:
+        logger.info("Initializing database...")
+        initialize_db()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Database initialization failed: {e}")
+        logger.error("Cannot start server without database. Exiting...")
         raise RuntimeError(f"Database initialization failed: {e}")
 
     # Initialize RAG Engine (Optional - can continue without it)
     try:
         namespace = load_namespace()
-        logger.info("🤖 Initializing RAG Engine...")
+        logger.info("Initializing RAG Engine...")
         get_rag_engine(namespace)
-        logger.info("✅ RAG Engine pre-loaded successfully")
+        logger.info("RAG Engine pre-loaded successfully")
     except Exception as e:
-        logger.error(f"❌ RAG Engine initialization failed: {e}")
-        logger.warning("⚠️ Continuing without RAG engine - queries may fail")
+        logger.error(f"RAG Engine initialization failed: {e}")
+        logger.warning("Continuing without RAG engine - queries may fail")
 
-    logger.info("✅ Application startup complete")
+    logger.info("Application startup complete")
 
     yield
 
     # Shutdown
-    logger.info("🛑 Shutting down Nisaa API Server...")
+    logger.info("Shutting down Nisaa API Server...")
     
     # Close database connections
     try:
@@ -92,9 +108,9 @@ async def lifespan(app: FastAPI):
         pool = get_pool()
         if pool:
             pool.closeall()
-            logger.info("✅ Database connections closed")
+            logger.info("Database connections closed")
     except Exception as e:
-        logger.error(f"⚠️ Error closing database connections: {e}")
+        logger.error(f"Error closing database connections: {e}")
 
 
 # ============================================================================

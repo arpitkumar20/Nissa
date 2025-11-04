@@ -126,37 +126,38 @@ def create_rag_graph():
     builder.add_edge("embed", "retrieve")
     builder.add_edge("retrieve", "format")
     builder.add_edge("format", "generate")
-    builder.add_edge("generate", "detect_uncertainty")
+    builder.add_edge("generate", END)
     
-    # ✅ CONDITIONAL BRANCH: Based on uncertainty
-    builder.add_conditional_edges(
-        "detect_uncertainty",
-        should_retry_with_history,
-        {
-            "load_history": "load_history",  # If uncertain
-            "save_memory": "save_memory"     # If confident
-        }
-    )
+    # # ✅ CONDITIONAL BRANCH: Based on uncertainty
+    # builder.add_conditional_edges(
+    #     "detect_uncertainty",
+    #     should_retry_with_history,
+    #     {
+    #         "load_history": "load_history",  # If uncertain
+    #         "save_memory": "save_memory"     # If confident
+    #     }
+    # )
     
-    # Retry path (only if uncertain)
-    builder.add_edge("load_history", "retry_generate")
-    builder.add_edge("retry_generate", "save_memory")
+    # # Retry path (only if uncertain)
+    # builder.add_edge("load_history", "retry_generate")
+    # builder.add_edge("retry_generate", "save_memory")
     
-    # Final edge
-    builder.add_edge("save_memory", END)
+    # # Final edge
+    # builder.add_edge("save_memory", END)
 
     # ============= SETUP CHECKPOINTER =============
-    try:
-        checkpointer = PostgresSaver.from_conn_string(DB_URI)
-        checkpointer.setup()
-        logger.info("PostgreSQL checkpointer initialized")
-    except Exception as e:
-        logger.warning(f"Checkpointer setup failed: {e}. Using memory checkpointer.")
-        from langgraph.checkpoint.memory import MemorySaver
-        checkpointer = MemorySaver()
+    # try:
+    #     checkpointer = PostgresSaver.from_conn_string(DB_URI)
+    #     checkpointer.setup()
+    #     logger.info("PostgreSQL checkpointer initialized")
+    # except Exception as e:
+    #     logger.warning(f"Checkpointer setup failed: {e}. Using memory checkpointer.")
+    #     from langgraph.checkpoint.memory import MemorySaver
+    #     checkpointer = MemorySaver()
 
     # ============= COMPILE GRAPH =============
-    graph = builder.compile(checkpointer=checkpointer)
+    # graph = builder.compile(checkpointer=checkpointer)
+    graph = builder.compile()
 
     logger.info("✅ RAG Graph compiled successfully with NEW FLOW")
     logger.info("📊 Flow: detect_id → embed → retrieve → format → generate → detect_uncertainty → [conditional] → save_memory")
