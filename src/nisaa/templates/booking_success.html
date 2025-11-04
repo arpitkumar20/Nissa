@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Booking Successful</title>
+  <style>
+    body {
+      font-family: "Poppins", sans-serif;
+      background: linear-gradient(-45deg, #b2dfdb, #c8e6c9, #a5d6a7, #80cbc4);
+      background-size: 400% 400%;
+      animation: gradient 10s ease infinite;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      color: #333;
+    }
+
+    @keyframes gradient {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      padding: 60px 80px;
+      text-align: center;
+      max-width: 500px;
+      animation: fadeIn 0.8s ease-in-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .checkmark {
+      font-size: 80px;
+      color: #4CAF50;
+      margin-bottom: 20px;
+      animation: pop 0.6s ease;
+    }
+
+    @keyframes pop {
+      0% { transform: scale(0); opacity: 0; }
+      80% { transform: scale(1.2); opacity: 1; }
+      100% { transform: scale(1); }
+    }
+
+    h1 {
+      font-size: 2rem;
+      margin-bottom: 10px;
+      color: #2e7d32;
+    }
+
+    p {
+      font-size: 1.1rem;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="checkmark">✅</div>
+    <h1>Booking Successful!</h1>
+    <p>Your appointment has been successfully scheduled.</p>
+  </div>
+</body>
+</html>

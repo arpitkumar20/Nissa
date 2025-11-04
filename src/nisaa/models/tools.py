@@ -32,6 +32,11 @@ TENANT_ID=os.environ.get('TENANT_ID')
 CHANNEL_NUMBER=os.environ.get('CHANNEL_NUMBER')
 WATI_APY_KEY=os.environ.get('WATI_APY_KEY')
 
+booking_template=os.environ.get('BOOKING_TEMPLATE')
+booking_broadcast_name=os.environ.get('BOOKING_BROADCAST_NAME')
+cancel_template=os.environ.get('CANCEL_TEMPLATE')
+cancel_broacast_name=os.environ.get('CANCEL_BROADCAST_NAME')
+
 def get_connection():
     """Establish and return a PostgreSQL connection."""
     try:
@@ -257,18 +262,17 @@ def get_appointment(
     mobile_number:str,
 ) -> str:
     """
-    Use this tool to show the booking preview when a user to book an appointment with CHOSEN specific doctor, date, and 
-    time slot.
-    **Important**-This is a preview of the booking details.User have to click BOOK NOW button to book the appoinment.
+    Creates a new *pending* booking in the database. 
+    Use this tool ONLY when the user has *already selected* a specific doctor, 
+    date, and time from the available slots.**User Should click BOOK NOW button to confirm booking. 
     
-    This tool previews the booking and places a temporary hold. It does 
-    NOT confirm the booking.
+    Do NOT use this to check for existing appointments.
 
     Args:
-        doctor_name (str): The full name of the doctor for the appointment.
-        date (str): The specific date of the appointment, in YYYY-MM-DD format.
-        time_slot (str): The specific time slot the user selected (e.g., "10:00 AM").
-        mobile_number (str):The user mobile number that will be used for further communication.
+        doctor_name (str): The full name of the doctor.
+        date (str): The selected date in YYYY-MM-DD format.
+        time_slot (str): The selected time (e.g., "10:00 AM").
+        mobile_number (str): The patient's mobile number.
     """
     
     print(f"--- Preview Tool Called: {doctor_name}, {date} at {time_slot} ---")
@@ -298,24 +302,22 @@ def get_appointment(
     encoded_string = encoded_bytes.decode('utf-8')
     booking_url = f'wati/template?phone={encoded_string}'
     
-    print('=====================mobile_number=======================',mobile_number)
-    send_whatsapp_template_message(whatsapp_number=mobile_number,template_name='sample_booking', broadcast_name='sample_booking_031120251332', body_value=str(booking_details), url_value=str(booking_url))
+    # print('=====================mobile_number=======================',mobile_number)
+    send_whatsapp_template_message(whatsapp_number=mobile_number,template_name=booking_template, broadcast_name=booking_broadcast_name, body_value=str(booking_details), url_value=str(booking_url))
     return json.dumps(booking_preview)
 
 @tool
 def show_bookings_details_by_phone_number(mobile_number: str):
 
     """
-    Use this tool when User want to get his booking information details.Fetches all booking records for a given patient phone number.
+    Fetches all *existing* (pending, confirmed, or past) bookings for a patient.
+    Use this when the user asks: "What are my appointments?", "Show me my bookings", 
+    "I want to verify my appointment", or "I need to cancel my booking".
+    
+    Do NOT use this to create a new appointment.
 
     Args:
-        mobile_number (str): The patient's mobile number to search for.
-
-    Returns:
-        A tuple: (bookings_list, error_message)
-        - On success: ([{'booking_id': 1, 'doctor_name': 'Dr. X', ...}, ...], None)
-        - If no bookings: ([], None)
-        - On error: (None, "An error occurred...")
+        patient_phone (str): The patient's mobile number (e.g., "+911234567890").
     """
     mobile_number=mobile_number.replace('+', '')
     bookings_list, error = get_booking_by_phone(mobile_number)
@@ -360,8 +362,8 @@ def show_bookings_details_by_phone_number(mobile_number: str):
         # 10. Send a separate message for EACH booking
         send_whatsapp_template_message(
             whatsapp_number=mobile_number,
-            template_name='cancel_booking_template', 
-            broadcast_name='cancel_booking_template_031120252001', 
+            template_name=cancel_template, 
+            broadcast_name=cancel_broacast_name, 
             body_value=booking_details, 
             url_value=booking_url
         )
