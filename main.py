@@ -1,7 +1,6 @@
 import os
 import sys
 from dotenv import load_dotenv
-# Import server module
 from src.nisaa.api.rest_server import run_server
 
 

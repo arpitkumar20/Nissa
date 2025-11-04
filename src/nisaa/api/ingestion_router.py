@@ -7,10 +7,10 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from nisaa.controllers.file_deduplication import FileDeduplicator, DBDeduplicator, ZohoDeduplicator
-from nisaa.controllers.job_manager import JobManager, JobStatus
+from src.nisaa.controllers.file_deduplication import FileDeduplicator, DBDeduplicator, ZohoDeduplicator
+from src.nisaa.controllers.job_manager import JobManager, JobStatus
 from src.nisaa.services.zoho_data_downloader import ZohoCreatorExporter
-from nisaa.services.s3_downloader import download_all_files_from_s3
+from src.nisaa.services.s3_downloader import download_all_files_from_s3
 from src.nisaa.helpers.logger import logger
 from src.nisaa.helpers.db import get_pool
 from src.nisaa.controllers.ingestion_pipeline import DataIngestionPipeline
