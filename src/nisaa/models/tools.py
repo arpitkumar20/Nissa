@@ -302,6 +302,10 @@ def book_appointment(
     encoded_string = encoded_bytes.decode('utf-8')
     booking_url = f'wati/template?phone={encoded_string}'
     
+    print("------------------------------------------")
+    print(booking_url)
+    print("--------------------------------------------")
+
     # print('=====================mobile_number=======================',mobile_number)
     send_whatsapp_template_message(whatsapp_number=mobile_number,template_name=booking_template, broadcast_name=booking_broadcast_name, body_value=str(booking_details), url_value=str(booking_url))
     return json.dumps(booking_preview)
