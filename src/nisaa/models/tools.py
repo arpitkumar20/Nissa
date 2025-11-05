@@ -255,7 +255,7 @@ from typing import Dict, Any
 from langchain_core.tools import tool
 
 @tool
-def get_appointment(
+def book_appointment(
     doctor_name: str, 
     date: str, 
     time_slot: str,
@@ -307,7 +307,7 @@ def get_appointment(
     return json.dumps(booking_preview)
 
 @tool
-def show_bookings_details_by_phone_number(mobile_number: str):
+def get_bookings_details(mobile_number: str):
 
     """
     Fetches all *existing* (pending, confirmed, or past) bookings for a patient.
@@ -321,17 +321,19 @@ def show_bookings_details_by_phone_number(mobile_number: str):
     """
     mobile_number=mobile_number.replace('+', '')
     bookings_list, error = get_booking_by_phone(mobile_number)
-
+    if not bookings_list:
+        print(f"No bookings found for {mobile_number}")
+        return "You have no bookings to show or  cancel.If you want to book an appoinment please reach out to us."
 # 2. ALWAYS check for errors first
     if error:
         print(f"Error fetching bookings: {error}")
         # Return a user-facing error message
-        return "I'm sorry, I couldn't fetch your booking details right now."
+        return "I'm sorry, I couldn't fetch your booking details right now.You have no bookings to show or  cancel.If you want to book an appoinment please reach out to us."
 
     # 3. Check if the list is empty
     if not bookings_list:
         print(f"No bookings found for {mobile_number}")
-        return "You have no bookings on file to cancel."
+        return "You have no bookings on file to cancel.You have no bookings to show or  cancel.If you want to book an appoinment please reach out to us."
 
     print(f"Found {len(bookings_list)} bookings for {mobile_number}. Sending cancel links...")
 
@@ -420,4 +422,4 @@ def send_whatsapp_template_message(
 
 
 
-ALL_TOOLS = [RAG_based_question_answer,get_next_two_available_days_and_slot,get_appointment,show_bookings_details_by_phone_number]
+ALL_TOOLS = [RAG_based_question_answer,get_next_two_available_days_and_slot,book_appointment,get_bookings_details]

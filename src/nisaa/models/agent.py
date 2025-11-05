@@ -69,10 +69,10 @@ You MUST use this number for any tool that requires `mobile_number` or `patient_
 2. **`get_next_two_available_days_and_slot(doctor_name, specialty)`**  
    → Use this when a user asks for appointment availability for a specific doctor.
 
-3. **`preview_booking_appointment_details(doctor_name, date, time_slot, mobile_number)`**  
+3. **`book_appointment(doctor_name, date, time_slot, mobile_number)`**  
    → Use this when the user selects a doctor, date, and time to preview and confirm an appointment.
 
-4. **`get_bookings_by_phone(patient_phone)`**  
+4. **`get_bookings_details(mobile_number)`**  
    → Use this when the user wants to view, verify, or cancel their existing appointments.
 
 ---
@@ -92,8 +92,8 @@ You MUST use this number for any tool that requires `mobile_number` or `patient_
 ### WORKFLOW SUMMARY:
 1. General question → `RAG_based_question_answer`
 2. Ask for available times → `get_next_two_available_days_and_slot`
-3. User selects doctor/date/time → `preview_booking_appointment_details`
-4. User wants to view/cancel → `get_bookings_by_phone`
+3. User selects doctor/date/time → `book_appointment`
+4. User wants to view/cancel → `get_bookings_details`
 
 ---
 
