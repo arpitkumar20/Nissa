@@ -1,3 +1,4 @@
+import ast
 import os
 import asyncio
 import json
@@ -23,7 +24,11 @@ def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
     try:
         decoded_bytes = base64.b64decode(base64_str)
         decoded_str = decoded_bytes.decode("utf-8")
-        credentials = json.loads(decoded_str)
+        try:
+            credentials = json.loads(decoded_str)
+        except json.JSONDecodeError:
+            credentials = ast.literal_eval(decoded_str)
+
         logger.info("✅ Zoho credentials decoded successfully")
         return credentials
     except Exception as e:
@@ -83,16 +88,16 @@ async def run_ingestion_pipeline(
                 zoho_client_id = decoded_creds.get("zoho_client_id")
                 zoho_client_secret = decoded_creds.get("zoho_client_secret")
                 zoho_refresh_token = decoded_creds.get("zoho_refresh_token")
-                zoho_owner_name = decoded_creds.get("zoho_owner_name")
-                
-                if not all([zoho_client_id, zoho_client_secret, zoho_refresh_token, zoho_owner_name]):
+                # zoho_owner_name = decoded_creds.get("zoho_owner_name")
+
+                if not all([zoho_client_id, zoho_client_secret, zoho_refresh_token]):
                     raise ValueError("Incomplete Zoho credentials")
                 
                 zoho_exporter = ZohoCreatorExporter(
                     client_id=zoho_client_id,
                     client_secret=zoho_client_secret,
                     refresh_token=zoho_refresh_token,
-                    owner_name=zoho_owner_name,
+                    # owner_name=zoho_owner_name,
                     output_dir=company_directory,
                     zoho_region=zoho_region
                 )
@@ -138,7 +143,6 @@ async def run_ingestion_pipeline(
             # Only add NEW Zoho files to all_file_paths
             new_zoho_file_paths = [report['file_path'] for report in new_zoho_reports]
             all_file_paths.extend(new_zoho_file_paths)
-            
             logger.info(
                 f"[{job_id}] Zoho: {len(new_zoho_reports)} new, "
                 f"{len(skipped_zoho_reports)} skipped"

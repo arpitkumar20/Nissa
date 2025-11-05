@@ -63,7 +63,7 @@ class ZohoCreatorExporter:
         client_id: str,
         client_secret: str,
         refresh_token: str,
-        owner_name: str,
+        # owner_name: str,
         output_dir: str,
         zoho_region: str = "IN",
     ):
@@ -81,7 +81,7 @@ class ZohoCreatorExporter:
         self.client_id = client_id
         self.client_secret = client_secret
         self.refresh_token = refresh_token
-        self.account_owner = owner_name
+        # self.account_owner = owner_name
         self.zoho_region = zoho_region.upper()
 
         # Validate region
@@ -135,16 +135,10 @@ class ZohoCreatorExporter:
         Refresh OAuth access token using refresh token
         Token expires in 1 hour, we refresh at 55 minutes
         """
-        token_url = f"{self.accounts_url}/oauth/v2/token"
-        params = {
-            "refresh_token": self.refresh_token,
-            "client_id": self.client_id,
-            "client_secret": self.client_secret,
-            "grant_type": "refresh_token",
-        }
+        token_url = f'{self.accounts_url}/oauth/v2/token?refresh_token={self.refresh_token}&client_id={self.client_id}&client_secret={self.client_secret}&grant_type=refresh_token'
 
         try:
-            response = requests.post(token_url, params=params, timeout=30)
+            response = requests.post(token_url, timeout=30)
             response.raise_for_status()
             data = response.json()
 
@@ -255,12 +249,32 @@ class ZohoCreatorExporter:
                     time.sleep(wait_time)
 
             raise Exception(f"Max retries ({max_retries}) exceeded for URL: {url}")
+    
+    def get_owner_name(self):
+        try:
+            url = f"{self.api_base_url}/creator/v2.1/meta/applications"
+            response = self.rate_limited_request("GET", url, timeout=30)
+
+            if response.status_code != 200:
+                print("Error fetching applications:", response.text)
+                return None
+
+            data = response.json()
+            apps = data.get("applications", [])
+            owner_name = next(iter(set(app.get("workspace_name") or app.get("created_by") for app in apps)), None)
+
+            return owner_name
+
+        except Exception as e:
+            logger.error({'message': 'Error getting applications', 'error': e})
+            raise
 
     def get_all_applications(self) -> List[Dict]:
         """
         Get all Zoho Creator applications
         API Call: 1 per account
         """
+        self.account_owner = self.get_owner_name()
         url = f"{self.api_base_url}/creator/v2.1/meta/{self.account_owner}/applications"
 
         try:
@@ -582,6 +596,7 @@ class ZohoCreatorExporter:
             Statistics dictionary with export results
         """
         start_time = time.time()
+        self.account_owner = self.get_owner_name()
 
         try:
             print("\n" + "=" * 70)
