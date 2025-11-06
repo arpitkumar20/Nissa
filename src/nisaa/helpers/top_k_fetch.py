@@ -17,7 +17,6 @@ def query_pinecone_topk(
     similarity_threshold: float = 0.3
 ) -> List[Dict]:
 
-    print("================================top k namespace for query ============================================================")
     namespaces_file="web_info/web_info.json"
     if not os.path.exists(namespaces_file):
         raise FileNotFoundError(f"JSON file not found: {namespaces_file}")
@@ -26,8 +25,6 @@ def query_pinecone_topk(
         data = json.load(f)
 
         namespace = data.get("namespace")
-    print(namespace)
-    print("============================================================================================")
 
     logger.info(f"Querying Pinecone index with top_k={top_k}, namespace={namespace}")
 

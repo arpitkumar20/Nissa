@@ -19,7 +19,6 @@ class PostgresChatHistory:
         f"port='{os.environ.get('DATABASE_PORT')}'"
        )
         self.conn_string = conn_string
-        print("🗄️ Database manager initialized.")
         self._create_table()
 
     def _get_connection(self):
@@ -62,9 +61,7 @@ class PostgresChatHistory:
                     """, (mobile_number, limit))
                     
                     rows = cursor.fetchall()
-                    
-                    # --- MODIFIED ---
-                    # Convert dicts to LangChain message objects
+
                     for row in rows:
                         role, content = row
                         if role == "user":
@@ -90,11 +87,6 @@ class PostgresChatHistory:
         except (Exception, psycopg2.DatabaseError) as e:
             print(f"Error saving message: {e}")
 
-     # You must import the errors module
-
-
- # Assuming you have this helper
-
     def initialize_and_save_booking(
         self,    
         patient_phone: str, 
@@ -114,7 +106,6 @@ class PostgresChatHistory:
             - On other error: (None, "An error occurred...")
         """
         
-        # 1. SQL to create the table only if it doesn't exist
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS bookings (
             booking_id SERIAL PRIMARY KEY,
@@ -127,7 +118,6 @@ class PostgresChatHistory:
         );
         """
 
-        # 2. SQL to insert the new booking
         insert_sql = """
         INSERT INTO bookings 
         (patient_phone, doctor_name, booking_date, booking_time, status)
@@ -144,7 +134,6 @@ class PostgresChatHistory:
                 with conn.cursor() as cursor:
                     cursor.execute(create_table_sql)
                 
-                # Step B: Try to insert the new booking
                     cursor.execute(insert_sql, (
                     patient_phone, 
                     doctor_name, 
@@ -153,7 +142,6 @@ class PostgresChatHistory:
                     status
                 ))
                 
-                # Step C: Get the new ID and commit
                 new_booking_id = cursor.fetchone()[0]
                 conn.commit()
                 
@@ -163,11 +151,10 @@ class PostgresChatHistory:
         except psycopg2.errors.UniqueViolation as e:
             print(f"Error: Duplicate booking detected for {patient_phone} and {doctor_name}")
             if conn:
-                conn.rollback() # Undo the failed transaction
+                conn.rollback()
             return None, "already in the database so can not add it"
                 
         except (Exception, psycopg2.DatabaseError) as e:
-            # Step E: Handle all other database errors
             print(f"General Error during booking: {e}")
             if conn:
                 conn.rollback()

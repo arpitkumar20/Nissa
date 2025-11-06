@@ -4,7 +4,19 @@ import logging.handlers
 from pathlib import Path
 
 warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning)
-logging.getLogger("pydantic").setLevel(logging.ERROR)
+
+# Reduce noise from external libraries
+for noisy_lib in [
+    "uvicorn",
+    "uvicorn.error",
+    "uvicorn.access",
+    "langchain_community",
+    "pinecone_plugin_interface",
+    "fastapi",
+    "asyncio",
+    "pydantic"
+]:
+    logging.getLogger(noisy_lib).setLevel(logging.ERROR)
 
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)

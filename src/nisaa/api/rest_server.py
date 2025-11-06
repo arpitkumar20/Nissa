@@ -11,25 +11,18 @@ from ..models.agent import create_stateless_agent
 from ..models.agent_context import PostgresChatHistory
 from ..models.chat_manager import ChatManager
 
-# Existing routers
 from src.nisaa.graphs.node import get_rag_engine
 from src.nisaa.api.ingestion_router import router as ingestion_router
 
-# New RAG router
 from src.nisaa.api.wati_router import router as wati_router
 
-# Database initialization
 from src.nisaa.helpers.db import initialize_db
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# Utility: Load Namespace from web_info.json
-# ============================================================================
 def load_namespace() -> str:
     """Load company namespace from web_info/web_info.json"""
     folder_path = "web_info"
@@ -47,62 +40,43 @@ def load_namespace() -> str:
     logger.error("Namespace not found, defaulting to 'default'")
     return "default"
 
-
-# ============================================================================
-# Lifespan Events
-# ============================================================================
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Handle startup and shutdown events
     """
-    # Startup
-    logger.info("Starting Nisaa API Server with Agentic RAG...")
-
-    # Initialize database tables (CRITICAL - must succeed)
     try:
-        logger.info("Creating PostgresChatHistory...")
         history_db = PostgresChatHistory()
 
-        logger.info("Creating Stateless Agent...")
         stateless_agent = create_stateless_agent()
 
-        logger.info("Creating ChatManager...")
         bot = ChatManager(agent=stateless_agent, history_manager=history_db)
 
         app.state.bot = bot
-        logger.info("ChatManager Bot initialized and attached to app state.")
+
     except Exception as e:
        logger.error(f"Bot initialization failed: {e}")
     try:
-        logger.info("Initializing database...")
+
         initialize_db()
-        logger.info("Database initialized successfully")
+
     except Exception as e:
-        logger.error(f"Database initialization failed: {e}")
         logger.error("Cannot start server without database. Exiting...")
         raise RuntimeError(f"Database initialization failed: {e}")
 
-    # Initialize RAG Engine (Optional - can continue without it)
     try:
         namespace = load_namespace()
-        logger.info("Initializing RAG Engine...")
+
         get_rag_engine(namespace)
-        logger.info("RAG Engine pre-loaded successfully")
+
     except Exception as e:
         logger.error(f"RAG Engine initialization failed: {e}")
         logger.warning("Continuing without RAG engine - queries may fail")
 
-    logger.info("Application startup complete")
-
     yield
 
-    # Shutdown
     logger.info("Shutting down Nisaa API Server...")
     
-    # Close database connections
     try:
         from src.nisaa.helpers.db import get_pool
         pool = get_pool()
@@ -112,11 +86,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error closing database connections: {e}")
 
-
-# ============================================================================
-# FastAPI Application
-# ============================================================================
-
 app = FastAPI(
     title="Nisaa API",
     description="REST API for Nisaa application with Agentic RAG",
@@ -124,23 +93,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Health check router
 health_router = APIRouter(prefix="/health", tags=["health"])
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# ============================================================================
-# Health Check Endpoints
-# ============================================================================
-
 
 @health_router.get("/")
 async def health_check() -> Dict[str, Any]:
@@ -157,7 +118,6 @@ async def health_check() -> Dict[str, Any]:
 async def detailed_health_check() -> Dict[str, Any]:
     """Detailed health check with component status"""
 
-    # Check RAG engine status
     rag_status = "not_initialized"
     try:
         namespace = load_namespace()
@@ -167,14 +127,12 @@ async def detailed_health_check() -> Dict[str, Any]:
     except Exception as e:
         rag_status = f"error: {str(e)}"
 
-    # Check database status
     db_status = "not_configured"
     try:
         from src.nisaa.helpers.db import get_pool
 
         pool = get_pool()
         if pool:
-            # Test connection
             conn = pool.getconn()
             pool.putconn(conn)
             db_status = "healthy"
@@ -201,12 +159,6 @@ async def detailed_health_check() -> Dict[str, Any]:
         },
     }
 
-
-# ============================================================================
-# Root Endpoint
-# ============================================================================
-
-
 @app.get("/")
 async def root() -> Dict[str, str]:
     """Root endpoint with API information"""
@@ -225,28 +177,9 @@ async def root() -> Dict[str, str]:
         },
     }
 
-
-# ============================================================================
-# Include All Routers
-# ============================================================================
-
-# Health check
 app.include_router(health_router)
-
-# New Agentic RAG WhatsApp Router
 app.include_router(wati_router, tags=["WhatsApp RAG"])
-
-# Existing routers
-# app.include_router(chatbot_router, tags=["Chatbot"])
-# app.include_router(extract_router, tags=["Extraction"])
-# app.include_router(zoho_router, tags=["Zoho"])
 app.include_router(ingestion_router, tags=["Ingestion"])
-
-
-# ============================================================================
-# Global Exception Handler
-# ============================================================================
-
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
@@ -260,21 +193,9 @@ async def global_exception_handler(request, exc):
         "path": str(request.url),
     }
 
-
-# ============================================================================
-# App Factory
-# ============================================================================
-
-
 def create_app() -> FastAPI:
     """Factory function to create the app"""
     return app
-
-
-# ============================================================================
-# Server Runner
-# ============================================================================
-
 
 def run_server(host: str = "127.0.0.1", port: int = 8000, debug: bool = False):
     """
@@ -285,8 +206,8 @@ def run_server(host: str = "127.0.0.1", port: int = 8000, debug: bool = False):
         port: Port to bind to
         debug: Enable debug mode with auto-reload
     """
-    logger.info(f"🚀 Starting server on {host}:{port}")
-    logger.info(f"📝 Debug mode: {debug}")
+    logger.info(f"Starting server on {host}:{port}")
+    logger.info(f"Debug mode: {debug}")
 
     uvicorn.run(
         "nisaa.api.rest_server:app",

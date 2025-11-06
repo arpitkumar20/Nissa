@@ -6,14 +6,12 @@ import logging
 from urllib.parse import unquote
 from datetime import datetime, timezone, timedelta
 
-# Load environment variables
 WATI_APY_KEY = os.getenv("WATI_APY_KEY")
 TENANT_ID = os.getenv("TENANT_ID")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER")
 CHANNEL_NUMBER = os.getenv("CHANNEL_NUMBER")
 BASE_URL="https://live-mt-server.wati.io"
 
-# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
@@ -236,7 +234,6 @@ def get_contact_messages(whatsapp_number: str):
     print("Fetching all messages started...")
 
     try:
-        # Get current date in IST
         IST = timezone(timedelta(hours=5, minutes=30))
         current_date = datetime.now(IST).date()
 
@@ -262,13 +259,11 @@ def get_contact_messages(whatsapp_number: str):
                     continue
 
                 try:
-                    # Convert UTC to IST
                     msg_datetime_utc = datetime.fromisoformat(created_time.replace("Z", "+00:00"))
                     msg_datetime_ist = msg_datetime_utc.astimezone(IST)
                 except Exception:
                     continue
 
-                # Filter only today's messages (IST date)
                 if msg_datetime_ist.date() == current_date:
                     if msg.get("statusString") == 'SENT' or msg.get('type') == 'text':
                         page_messages.append({
@@ -276,14 +271,13 @@ def get_contact_messages(whatsapp_number: str):
                             "id": msg.get('id'),
                             "eventType": msg.get("eventType"),
                             "statusString": msg.get("statusString"),
-                            # Format the time in readable IST format
                             "created": msg_datetime_ist.strftime("%Y-%m-%d %I:%M:%S %p"),
                             "conversationId": msg.get("conversationId"),
                             "ticketId": msg.get('ticketId')
                         })
 
             all_messages.extend(page_messages)
-            print(f"✅ Fetched {len(page_messages)} messages from page {page_number} (today only)")
+            print(f"Fetched {len(page_messages)} messages from page {page_number} (today only)")
 
             link_info = data.get("link", {})
             next_page_url = link_info.get("nextPage")

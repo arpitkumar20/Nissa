@@ -44,7 +44,6 @@ def get_connection():
     except Exception as e:
         raise ConnectionError(f"[DB ERROR] Unable to connect: {e}")
 
-# --- Tool 1: RAG (Knowledge Base) ---
 @tool
 def RAG_based_question_answer(query: str,mobile_number:str) -> str:
     """
@@ -57,15 +56,11 @@ def RAG_based_question_answer(query: str,mobile_number:str) -> str:
     """
     from src.nisaa.api.rest_server import load_namespace
 
-    # get namespace for rag
     namespace = load_namespace()
     result = execute_rag_pipeline(user_query=query, user_phone_number=mobile_number, company_namespace=namespace)
     print(result.get("model_response"))
-    print(f"--- 🛠️ RAG Tool: Searching for '{query}' ---")
-    # In a real app, you would query your Vector DB here
-    # RAG_PIPELINE.invoke(query)
-    # simulated_rag_result = f"The knowledge base says: '{query}' is a common question. We are open 9-5."
-    # return result.get("model_response")
+    print(f"--- RAG Tool: Searching for '{query}' ---")
+
     return result.get("model_response")
 
 @tool
@@ -123,7 +118,7 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
 
                 search_pattern = build_search_pattern(doctor_name)
                 specialty_pattern = build_search_pattern(specialty)
-                # 1️⃣ Fetch doctor info
+
                 cur.execute("""
                     SELECT doctor_id, name, qualifications, days_available, 
                            start_time, end_time, slot_duration_mins
@@ -138,7 +133,6 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
                     print(f"[INFO] No doctor found for name: {doctor_name}")
                     return None
 
-                # 2️⃣ Parse available days
                 days_str = doc.get("days_available") or ""
                 available_days = [d.strip().capitalize() for d in days_str.split(",") if d.strip()]
 
@@ -152,10 +146,9 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
                     print(f"[INFO] Doctor {doc['name']} has no available days.")
                     return None
 
-                # 3️⃣ Find next 2 available dates
                 today = date.today()
                 found_dates = []
-                for offset in range(1, 22):  # check next 3 weeks
+                for offset in range(1, 22):
                     candidate = today + timedelta(days=offset)
                     if candidate.weekday() in available_indices:
                         found_dates.append(candidate)
@@ -166,7 +159,6 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
                     print(f"[INFO] No upcoming available days found for {doc['name']}")
                     return None
 
-                # 4️⃣ Parse doctor timings
                 def parse_time_str(tstr):
                     return tstr if isinstance(tstr, time) else datetime.strptime(tstr.strip(), "%H:%M").time()
 
@@ -174,7 +166,6 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
                 end_time_obj = parse_time_str(doc["end_time"])
                 slot_duration = int(doc["slot_duration_mins"])
 
-                # 5️⃣ Generate slots (limit to 3)
                 def build_slots_for_day(start_t: time, end_t: time, duration_mins: int, limit: int = 3):
                     slots = []
                     anchor = datetime.combine(date.today(), start_t)
@@ -193,7 +184,6 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
                         anchor = slot_end
                     return slots
 
-                # 6️⃣ Fetch booked slots for this doctor
                 cur.execute("""
                     SELECT booking_date, booking_time
                     FROM bookings
@@ -204,14 +194,12 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
 
                 bookings = cur.fetchall()
 
-                # 7️⃣ Map booked times by date
                 booked_by_date = {}
                 for b in bookings:
                     bdate = b["booking_date"]
                     btime = b["booking_time"].strftime("%H:%M") if isinstance(b["booking_time"], time) else b["booking_time"]
                     booked_by_date.setdefault(bdate, set()).add(btime)
 
-                # 8️⃣ Build 3 available slots per date
                 result_dates = []
                 for d in found_dates:
                     slots = build_slots_for_day(start_time_obj, end_time_obj, slot_duration, limit=3)
@@ -225,7 +213,6 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
                         "slots": slots
                     })
 
-                #Return structured data
                 return {
                     "doctor_id": doc["doctor_id"],
                     "doctor_name": doc["name"],
@@ -245,13 +232,10 @@ def build_search_pattern(doctor_name: str) -> str:
     Builds a SQL LIKE pattern that matches any word combination from doctor_name.
     Example: "Dr. Abdul Moiz" -> "%dr%abdul%moiz%"
     """
-    # Normalize: lowercase + remove punctuation + split into words
     tokens = re.findall(r'\w+', doctor_name.lower())
-    # Join them with % for flexible partial match
     return '%' + '%'.join(tokens) + '%'
 
 import json
-from typing import Dict, Any
 from langchain_core.tools import tool
 
 @tool
@@ -275,9 +259,6 @@ def book_appointment(
         mobile_number (str): The patient's mobile number.
     """
     
-    print(f"--- Preview Tool Called: {doctor_name}, {date} at {time_slot} ---")
-    
-    # 1. This is where you "make it a dict"
     booking_preview = {
         "doctor": doctor_name,
         "date": date,
@@ -289,24 +270,15 @@ def book_appointment(
     booking_details = f"Booking details:Doctor Name {doctor_name} Date {date} Time slot {time_slot}"
     mobile_number=mobile_number.replace('+', '')
 
-    # dr_name_stripped = "".join(c for c in doctor_name if c.isalpha())
     composite_string = f"{mobile_number}-{doctor_name}---{date}----{time_slot}"
 
-# 2. Convert the string to bytes
     string_bytes = composite_string.encode('utf-8')
 
-# 3. Encode the bytes using URL-safe Base64
     encoded_bytes = base64.urlsafe_b64encode(string_bytes)
 
-# 4. Convert the encoded bytes back to a string
     encoded_string = encoded_bytes.decode('utf-8')
     booking_url = f'wati/template?phone={encoded_string}'
-    
-    print("------------------------------------------")
-    print(booking_url)
-    print("--------------------------------------------")
 
-    # print('=====================mobile_number=======================',mobile_number)
     send_whatsapp_template_message(whatsapp_number=mobile_number,template_name=booking_template, broadcast_name=booking_broadcast_name, body_value=str(booking_details), url_value=str(booking_url))
     return json.dumps(booking_preview)
 
@@ -328,13 +300,11 @@ def get_bookings_details(mobile_number: str):
     if not bookings_list:
         print(f"No bookings found for {mobile_number}")
         return "You have no bookings to show or  cancel.If you want to book an appoinment please reach out to us."
-# 2. ALWAYS check for errors first
+
     if error:
         print(f"Error fetching bookings: {error}")
-        # Return a user-facing error message
         return "I'm sorry, I couldn't fetch your booking details right now.You have no bookings to show or  cancel.If you want to book an appoinment please reach out to us."
 
-    # 3. Check if the list is empty
     if not bookings_list:
         print(f"No bookings found for {mobile_number}")
         return "You have no bookings on file to cancel.You have no bookings to show or  cancel.If you want to book an appoinment please reach out to us."
@@ -344,28 +314,19 @@ def get_bookings_details(mobile_number: str):
     
     mobile_number_clean = mobile_number.replace('+', '')
 
-    # 5. Correctly loop over the list
     for booking in bookings_list:
-        
-        # 6. EXTRACT data *from the booking* dictionary
-        # Use .get() for safety, and convert date/time objects to strings
         doctor_name = booking.get('doctor_name', 'N/A')
         date = str(booking.get('booking_date', 'N/A'))
         time_slot = str(booking.get('booking_time', 'N/A'))
 
-        # 7. Build the details FOR THIS SPECIFIC booking
-        booking_details = f"Booking details: Doctor {doctor_name}, Date {date}, Time {time_slot}"
-        
-        # 8. Build the composite string FOR THIS SPECIFIC booking
+        booking_details = f"Booking details: Doctor {doctor_name}, Date {date}, Time {time_slot}"        
         composite_string = f"{mobile_number_clean}-{doctor_name}---{date}----{time_slot}"
 
-        # 9. Encode the composite string
         string_bytes = composite_string.encode('utf-8')
         encoded_bytes = base64.urlsafe_b64encode(string_bytes)
         encoded_string = encoded_bytes.decode('utf-8')
         booking_url = f'wati/booking/cancel?phone={encoded_string}'
-        # booking_url = f'wati/booking/cancel'
-        # 10. Send a separate message for EACH booking
+
         send_whatsapp_template_message(
             whatsapp_number=mobile_number,
             template_name=cancel_template, 
@@ -374,7 +335,6 @@ def get_bookings_details(mobile_number: str):
             url_value=booking_url
         )
 
-    # 11. Return a final confirmation message to the user
     return f"I found {len(bookings_list)} booking(s). I've sent you a separate message for each one with a link to cancel."
     
  
@@ -422,8 +382,5 @@ def send_whatsapp_template_message(
     except requests.exceptions.RequestException as e:
         print(f"Exception occurred while sending template message: {e}")
         return {"error": str(e)}
-
-
-
 
 ALL_TOOLS = [RAG_based_question_answer,get_next_two_available_days_and_slot,book_appointment,get_bookings_details]

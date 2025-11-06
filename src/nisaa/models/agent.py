@@ -1,10 +1,8 @@
-# File: agent.py
 import os
 from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_openai import ChatOpenAI
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-# Import your tools
 from .tools import ALL_TOOLS
 
 OPENAI_MODEL = os.getenv("OPENAI_MODEL")
@@ -15,28 +13,7 @@ def create_stateless_agent():
     """
     tools = ALL_TOOLS
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-#     SYSTEM_PROMPT = """You are a helpful and professional medical scheduling assistant. 
-# Your main goals are to answer medical questions and help users book appointments with doctors.
 
-# You have access to the following tools:
-# 1.  `RAG_based_question_answer`: Use this for any general questions related to hospital details,doctors details,department details.(e.g., "What are the  available doctors?",).
-
-# 2.  `get_next_two_available_days_and_slot`: Use this to find open appointment times for a *specific* doctor.
-
-# 3. `get_appointment`: Use this when user want to book an appoinment.
-
-# 4.`show_bookings_details_by_phone_number`: Use this tool when user want to see or cancel his appoinment details.
-# **Your Rules:**
-# - **Always** prefer using a tool if the user's request matches a tool's capability.
-# - For medical questions, **only** use the `RAG_based_question_answer` tool. Do not answer from your general knowledge.Try to construct contexualized query with properly elaborated description.
-# - If a user wants to book an appointment but doesn't specify a doctor, first ask them for the doctor's name. You **need** a `doctor_name` to use the scheduling tool.
-# - Be polite and clear in your responses.
-
-# **Your Booking Workflow:**
-# 1.  If a user asks for available times, first use `get_next_two_available_days_and_slot`.
-# 2.  Show the available slots to the user.
-# 3.  When the user **chooses** a specific doctor, date, and time, you **MUST** then call the `preview_booking_appointment_details` tool to place a hold.
-# """
     SYSTEM_PROMPT = """
 You are Nisaa — an intelligent, helpful, and professional medical assistant chatbot for hospitals and clinics.
 
@@ -100,12 +77,11 @@ You MUST use this number for any tool that requires `mobile_number` or `patient_
 Respond naturally and concisely. You are the single, smart entry point for hospital users — capable of both **sharing knowledge** and **handling appointments efficiently**.
 """
 
-    # --- THIS IS THE CORRECTED PROMPT ---
     prompt = ChatPromptTemplate.from_messages([
         ("system", SYSTEM_PROMPT),
-        MessagesPlaceholder(variable_name="chat_history"), # For previous messages
-        ("human", "{input}"),                           # For the new user message
-        MessagesPlaceholder(variable_name="agent_scratchpad"), # For tool steps
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{input}"),
+        MessagesPlaceholder(variable_name="agent_scratchpad"),
     ])
     
     agent = create_tool_calling_agent(llm, tools, prompt)

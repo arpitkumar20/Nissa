@@ -1,27 +1,25 @@
 import os
 import sys
+import warnings
 from dotenv import load_dotenv
 from src.nisaa.api.rest_server import run_server
 
+warnings.filterwarnings("ignore")
 
 def main():
     """
     Main entry point for starting the Nisaa API server
     """
     try:
-        # Load environment variables
         load_dotenv()
       
-        # Get configuration from environment
         host = os.getenv("HOST", "0.0.0.0")
         port = int(os.getenv("PORT", "4011"))
         debug = os.getenv("DEBUG", "false").lower() == "true"
 
-        # Display startup information
         print(f" Host: {host}")
         print(f" Port: {port}")
 
-        # Verify critical environment variables
         required_vars = [
             "OPENAI_API_KEY",
             "PINECONE_API_KEY",
@@ -42,7 +40,7 @@ def main():
                 print(f"{var}")
 
         # Start the server
-        print("🎯 Starting server...\n")
+        print("Starting server...\n")
         run_server(host=host, port=port, debug=debug)
 
     except ImportError as e:

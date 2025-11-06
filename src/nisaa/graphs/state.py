@@ -1,7 +1,7 @@
 """
 Graph State Definition - FIXED VERSION
 
-✅ Key Changes:
+Key Changes:
 1. Added needs_history field for uncertainty tracking
 2. Added history_messages field for conditional history loading
 3. Proper initialization of all fields
@@ -20,46 +20,36 @@ class GraphState(TypedDict):
     """
     State schema for the RAG conversation graph
     
-    ✅ UPDATED: Added fields for new uncertainty-based retry flow
+    UPDATED: Added fields for new uncertainty-based retry flow
 
     Uses add_messages reducer to properly handle message history
     while maintaining additional metadata fields
     """
 
-    # Core conversation state (with message reducer)
     messages: Annotated[List[AnyMessage], add_messages]
 
-    # User identification
     user_phone_number: str
     thread_id: str
-    company_namespace: str  # ✅ CRITICAL: Used for vector store namespace
+    company_namespace: str
 
-    # Query processing
-    user_query: str  # Original query from user
-    contextualized_query: str  # Reformulated standalone query (deprecated in new flow)
+    user_query: str
+    contextualized_query: str
 
-    # ID/Phone detection
     is_id_query: bool
-    id_type: Optional[str]  # 'record_id', 'unique_id', 'phone', or None
+    id_type: Optional[str]
     id_value: Optional[str]
 
-    # Embedding & retrieval
     query_embedding: Optional[List[float]]
     retrieved_documents: List[Dict[str, Any]]
-    search_type: str  # 'exact_match', 'semantic', 'hybrid'
+    search_type: str
     num_documents: int
 
-    # Context formatting
     formatted_context: str
-
-    # LLM response
     model_response: str
 
-    # ✅ NEW: Uncertainty detection & retry
-    needs_history: bool  # True if response was uncertain
-    history_messages: List[AnyMessage]  # Loaded only if needed
+    needs_history: bool
+    history_messages: List[AnyMessage]
 
-    # Metadata
     processing_time: float
     error: Optional[str]
 
@@ -72,7 +62,7 @@ def create_initial_state(
     """
     Create initial state for a new conversation turn
     
-    ✅ FIXED: Properly initializes all fields including new ones
+    FIXED: Properly initializes all fields including new ones
 
     Args:
         user_query: User's input message
@@ -88,40 +78,30 @@ def create_initial_state(
     logger.info(f"Creating initial state for namespace: {company_namespace}")
     
     return GraphState(
-        # Core conversation
         messages=[],
         
-        # User identification
         user_phone_number=user_phone_number,
         thread_id=str(user_phone_number),
         company_namespace=company_namespace,
         
-        # Query processing
         user_query=user_query,
-        contextualized_query="",  # Deprecated in new flow
+        contextualized_query="",
         
-        # ID/Phone detection
         is_id_query=False,
         id_type=None,
         id_value=None,
         
-        # Embedding & retrieval
         query_embedding=None,
         retrieved_documents=[],
         search_type="semantic",
         num_documents=0,
         
-        # Context formatting
-        formatted_context="",
-        
-        # LLM response
+        formatted_context="",        
         model_response="",
         
-        # ✅ NEW: Uncertainty & retry
         needs_history=False,
         history_messages=[],
         
-        # Metadata
         processing_time=0.0,
         error=None,
     )
@@ -131,14 +111,7 @@ def log_state(state: GraphState, node_name: str):
     """
     Debug utility to log state at each node
     
-    ✅ UPDATED: Includes new fields in logging
+    UPDATED: Includes new fields in logging
     """
-    logger.info(f"[{node_name}] State snapshot:")
-    logger.info(f"  - Thread: {state.get('thread_id')}")
-    logger.info(f"  - Namespace: {state.get('company_namespace')}")
-    logger.info(f"  - Query: {state.get('user_query', '')[:100]}")
-    logger.info(f"  - Messages: {len(state.get('messages', []))}")
-    logger.info(f"  - ID Query: {state.get('is_id_query')}")
-    logger.info(f"  - Documents: {state.get('num_documents')}")
-    logger.info(f"  - Search Type: {state.get('search_type')}")
-    logger.info(f"  - Needs History: {state.get('needs_history', False)}")
+
+    logger.info(f"[{node_name}] State snapshot:  - Thread: {state.get('thread_id')}  - Namespace: {state.get('company_namespace')} - Query: {state.get('user_query', '')[:100]}  - Messages: {len(state.get('messages', []))}  - ID Query: {state.get('is_id_query')} - Documents: {state.get('num_documents')}  - Documents: {state.get('num_documents')}  - Search Type: {state.get('search_type')}  - Needs History: {state.get('needs_history', False)}")

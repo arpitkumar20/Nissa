@@ -1,7 +1,7 @@
 """
 Hybrid RAG Query Engine - FIXED VERSION
 
-✅ Key Changes:
+Key Changes:
 1. Removed dependency on web_info.json file
 2. Namespace MUST be passed as parameter (no defaults)
 3. Better error handling for missing namespace
@@ -22,10 +22,6 @@ from langchain_core.documents import Document
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone as PineconeClient
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
 load_dotenv()
 
 logging.basicConfig(
@@ -34,36 +30,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
-# Model Configuration
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX", "nisaa-knowledge")
 
-# Retrieval Configuration
 TOP_K = int(os.getenv("TOP_K", "5"))
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.65"))
-
-
-# ============================================================================
-# HYBRID SEARCH RAG QUERY ENGINE
-# ============================================================================
 
 
 class HybridRAGQueryEngine:
     """
     Enhanced RAG Engine with Hybrid Search for LangGraph
     
-    ✅ FIXED: Thread-safe and designed for per-request instantiation
+    FIXED: Thread-safe and designed for per-request instantiation
     No longer uses singleton pattern or file reading
     """
 
     def __init__(
         self,
-        namespace: str,  # ✅ REQUIRED: No default value
+        namespace: str,
         pinecone_index_name: str = PINECONE_INDEX_NAME,
         embedding_model: str = EMBEDDING_MODEL,
         llm_model: str = LLM_MODEL,
@@ -75,7 +63,7 @@ class HybridRAGQueryEngine:
         """
         Initialize Hybrid RAG Query Engine
         
-        ✅ CRITICAL FIX: Namespace is now REQUIRED parameter
+        CRITICAL FIX: Namespace is now REQUIRED parameter
         
         Args:
             namespace: Company-specific namespace (MUST be provided)
@@ -91,7 +79,6 @@ class HybridRAGQueryEngine:
             ValueError: If namespace is None or empty
         """
         
-        # ✅ CRITICAL: Validate namespace
         if not namespace:
             raise ValueError(
                 "Namespace is REQUIRED and cannot be None or empty. "
@@ -103,44 +90,27 @@ class HybridRAGQueryEngine:
         self.top_k = top_k
         self.similarity_threshold = similarity_threshold
 
-        logger.info(f"Initializing RAG Engine for namespace: '{namespace}'")
-
-        # Initialize embeddings
-        logger.info(f"  - Embedding model: {embedding_model}")
         self.embeddings = OpenAIEmbeddings(
             model=embedding_model, 
             openai_api_key=OPENAI_API_KEY
         )
 
-        # Initialize Pinecone client
-        logger.info(f"  - Pinecone index: {pinecone_index_name}")
         self.pc = PineconeClient(api_key=PINECONE_API_KEY)
         
-        # Initialize vector store using langchain-pinecone
-        logger.info(f"  - Vector store namespace: {namespace}")
         self.vectorstore = PineconeVectorStore(
             index_name=pinecone_index_name,
             embedding=self.embeddings,
             namespace=namespace,
         )
         
-        # Get the index for direct queries
         self.index = self.pc.Index(pinecone_index_name)
 
-        # Initialize LLM
-        logger.info(f"  - LLM model: {llm_model}")
         self.llm = ChatOpenAI(
             model=llm_model,
             temperature=temperature,
             max_tokens=max_tokens,
             openai_api_key=OPENAI_API_KEY,
         )
-
-        logger.info(f"✅ RAG Engine initialized for namespace '{namespace}'")
-
-    # ========================================================================
-    # ID DETECTION AND EXTRACTION
-    # ========================================================================
 
     def detect_id_in_query(self, query: str) -> Dict[str, Any]:
         """
@@ -156,7 +126,6 @@ class HybridRAGQueryEngine:
         """
         query_lower = query.lower()
 
-        # Pattern 1: Long numeric IDs (15+ digits - record IDs)
         long_id_pattern = r"\b\d{15,}\b"
         long_id_match = re.search(long_id_pattern, query)
         if long_id_match:
@@ -168,7 +137,6 @@ class HybridRAGQueryEngine:
                 "original_query": query,
             }
 
-        # Pattern 2: Formatted phone numbers
         formatted_phone_pattern = r"[\+]?[(]?[0-9]{1,4}[)]?[-\s\.][(]?[0-9]{1,4}[)]?[-\s\.][0-9]{3,4}[-\s\.][0-9]{3,4}"
         formatted_phone_match = re.search(formatted_phone_pattern, query)
         if formatted_phone_match:
@@ -183,7 +151,6 @@ class HybridRAGQueryEngine:
                     "original_query": query,
                 }
 
-        # Pattern 3: Plain phone numbers (10-14 digits)
         plain_phone_pattern = r"(?:\+91)?[6-9]\d{9}\b"
         plain_phone_match = re.search(plain_phone_pattern, query)
         if plain_phone_match:
@@ -196,14 +163,13 @@ class HybridRAGQueryEngine:
                 "original_query": query,
             }
 
-        # Pattern 4: Unique IDs WITH hyphens (IHI-5-130)
         unique_id_hyphenated_pattern = r"\b[A-Z]{2,}-\d+-\d+\b"
         unique_id_hyphenated_match = re.search(
             unique_id_hyphenated_pattern, query, re.IGNORECASE
         )
         if unique_id_hyphenated_match:
             logger.info(
-                f"🔍 Detected UNIQUE_ID (hyphenated): {unique_id_hyphenated_match.group()}"
+                f"Detected UNIQUE_ID (hyphenated): {unique_id_hyphenated_match.group()}"
             )
             return {
                 "is_id_query": True,
@@ -212,14 +178,13 @@ class HybridRAGQueryEngine:
                 "original_query": query,
             }
 
-        # Pattern 5: Unique IDs WITHOUT hyphens (IHI2302145)
         unique_id_no_hyphen_pattern = r"\b[A-Z]{2,}\d{5,}\b"
         unique_id_no_hyphen_match = re.search(
             unique_id_no_hyphen_pattern, query, re.IGNORECASE
         )
         if unique_id_no_hyphen_match:
             logger.info(
-                f"🔍 Detected UNIQUE_ID (no hyphens): {unique_id_no_hyphen_match.group()}"
+                f"Detected UNIQUE_ID (no hyphens): {unique_id_no_hyphen_match.group()}"
             )
             return {
                 "is_id_query": True,
@@ -228,17 +193,15 @@ class HybridRAGQueryEngine:
                 "original_query": query,
             }
 
-        # Pattern 6: Keywords indicating ID/phone queries
         phone_keywords = ["phone", "mobile", "contact", "number"]
         id_keywords = ["id", "unique id", "record id", "identifier"]
 
-        # Check for phone keywords
         if any(kw in query_lower for kw in phone_keywords):
             words = query.split()
             for word in words:
                 cleaned = word.strip(',.?!:;()[]{}"\'"')
                 if cleaned.isdigit() and 10 <= len(cleaned) <= 14:
-                    logger.info(f"📱 Detected PHONE from context: {cleaned}")
+                    logger.info(f"Detected PHONE from context: {cleaned}")
                     return {
                         "is_id_query": True,
                         "id_type": "phone",
@@ -246,13 +209,12 @@ class HybridRAGQueryEngine:
                         "original_query": query,
                     }
 
-        # Check for ID keywords
         if any(kw in query_lower for kw in id_keywords):
             words = query.split()
             for word in words:
                 cleaned = word.strip(',.?!:;()[]{}"\'"')
                 if cleaned.isdigit() and len(cleaned) >= 15:
-                    logger.info(f"🔍 Detected RECORD_ID from context: {cleaned}")
+                    logger.info(f"Detected RECORD_ID from context: {cleaned}")
                     return {
                         "is_id_query": True,
                         "id_type": "record_id",
@@ -260,7 +222,7 @@ class HybridRAGQueryEngine:
                         "original_query": query,
                     }
 
-        logger.info("🔎 No ID/Phone detected - using semantic search")
+        logger.info("No ID/Phone detected - using semantic search")
         return {
             "is_id_query": False,
             "id_type": None,
@@ -268,9 +230,6 @@ class HybridRAGQueryEngine:
             "original_query": query,
         }
 
-    # ========================================================================
-    # HYBRID RETRIEVAL
-    # ========================================================================
 
     def retrieve_by_id(
         self, id_type: str, id_value: str, top_k: int = 5
@@ -286,15 +245,13 @@ class HybridRAGQueryEngine:
         Returns:
             List of Document objects
         """
-        logger.info(f"🎯 Exact ID Search: {id_type} = {id_value} in namespace '{self.namespace}'")
+        logger.info(f"Exact ID Search: {id_type} = {id_value} in namespace '{self.namespace}'")
 
         try:
-            # Generate query embedding
             query_embedding = self.embeddings.embed_query(
                 f"Find record with {id_type} {id_value}"
             )
 
-            # Query Pinecone with metadata filter
             results = self.index.query(
                 vector=query_embedding,
                 filter={id_type: {"$eq": id_value}},
@@ -304,7 +261,7 @@ class HybridRAGQueryEngine:
             )
 
             if results.matches:
-                logger.info(f"✅ Found {len(results.matches)} exact matches")
+                logger.info(f"Found {len(results.matches)} exact matches")
 
                 docs = []
                 for match in results.matches:
@@ -316,14 +273,13 @@ class HybridRAGQueryEngine:
 
                 return docs
             else:
-                logger.warning(f"⚠️ No exact matches for {id_type}={id_value}")
-                logger.info("🔄 Falling back to semantic search")
+                logger.warning(f"No exact matches for {id_type}={id_value}")
                 return self.retrieve_semantic(
                     f"Find information about {id_type} {id_value}", top_k
                 )
 
         except Exception as e:
-            logger.error(f"❌ Error in ID search: {str(e)}")
+            logger.error(f"Error in ID search: {str(e)}")
             return self.retrieve_semantic(f"{id_type} {id_value}", top_k)
 
     def retrieve_semantic(self, query: str, top_k: int = 5) -> List[Document]:
@@ -337,8 +293,6 @@ class HybridRAGQueryEngine:
         Returns:
             List of Document objects
         """
-        logger.info(f"🔎 Semantic Search: {query[:100]} in namespace '{self.namespace}'")
-
         try:
             retriever = self.vectorstore.as_retriever(
                 search_type="similarity", 
@@ -346,11 +300,11 @@ class HybridRAGQueryEngine:
             )
 
             docs = retriever.invoke(query)
-            logger.info(f"✅ Found {len(docs)} semantic matches")
+            logger.info(f"Found {len(docs)} semantic matches")
             return docs
 
         except Exception as e:
-            logger.error(f"❌ Error in semantic search: {str(e)}")
+            logger.error(f"Error in semantic search: {str(e)}")
             return []
 
     def hybrid_retrieve(
@@ -369,14 +323,11 @@ class HybridRAGQueryEngine:
         if top_k is None:
             top_k = self.top_k
 
-        # Detect ID/phone
         id_info = self.detect_id_in_query(query)
 
         if id_info["is_id_query"]:
-            # Use exact ID matching
             docs = self.retrieve_by_id(id_info["id_type"], id_info["id_value"], top_k)
             return docs, f"{id_info['id_type']}_match"
         else:
-            # Use semantic search
             docs = self.retrieve_semantic(query, top_k)
             return docs, "semantic"

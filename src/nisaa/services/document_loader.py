@@ -105,7 +105,7 @@ class DocumentLoader:
         Args:
             exclude_json: If True, skip JSON files (they'll be processed separately)
         """
-        logger.info(f"📁 Loading documents for company: {self.company_namespace}")
+        logger.info(f"Loading documents for company: {self.company_namespace}")
         logger.info(f"Directory: {self.directory_path}")
 
         try:
@@ -129,7 +129,7 @@ class DocumentLoader:
 
             with tqdm(
                 total=len(loaders),
-                desc="📁 File Types",
+                desc="File Types",
                 unit="type",
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}]",
             ) as pbar:
@@ -148,7 +148,7 @@ class DocumentLoader:
                 doc.metadata["company_namespace"] = self.company_namespace
                 doc.metadata["source_type"] = "file"
 
-            logger.info(f"✅ Successfully loaded {len(documents)} documents from files")
+            logger.info(f"Successfully loaded {len(documents)} documents from files")
             return documents
 
         except Exception as e:
@@ -174,7 +174,7 @@ class DocumentLoader:
         Returns:
             List of Document objects
         """
-        logger.info(f"📁 Loading {len(file_paths)} specific files")
+        logger.info(f"Loading {len(file_paths)} specific files")
         
         documents = []
         
@@ -218,5 +218,5 @@ class DocumentLoader:
             doc.metadata["company_namespace"] = self.company_namespace
             doc.metadata["source_type"] = "file"
         
-        logger.info(f"✅ Successfully loaded {len(documents)} documents from {len(file_paths)} files")
+        logger.info(f"Successfully loaded {len(documents)} documents from {len(file_paths)} files")
         return documents

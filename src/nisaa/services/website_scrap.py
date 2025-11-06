@@ -215,7 +215,7 @@ class WebsiteIngester:
 
         with tqdm(
             total=100,
-            desc=f"  🌐 {urlparse(url).netloc}",
+            desc=f"{urlparse(url).netloc}",
             leave=False,
             bar_format="{l_bar}{bar}| {percentage:3.0f}%",
         ) as progress:
@@ -291,11 +291,11 @@ class WebsiteIngester:
 
                 self.stats["total_pages"] += len(cleaned_docs)
                 progress.update(30)
-                progress.set_postfix_str(f"✓ {len(cleaned_docs)} pages")
+                progress.set_postfix_str(f"{len(cleaned_docs)} pages")
                 return cleaned_docs
 
             progress.update(100)
-            progress.set_postfix_str("✗ No pages found")
+            progress.set_postfix_str("No pages found")
 
         return []
 
@@ -304,13 +304,13 @@ class WebsiteIngester:
         if not urls:
             return []
             
-        logger.info(f"🌐 Starting website ingestion for {len(urls)} URLs")
+        logger.info(f"Starting website ingestion for {len(urls)} URLs")
 
         all_documents = []
 
         with tqdm(
             total=len(urls),
-            desc="🌐 Websites",
+            desc="Websites",
             unit="site",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}]",
         ) as pbar:
@@ -331,7 +331,7 @@ class WebsiteIngester:
                     pbar.update(1)
 
         logger.info(
-            f"✅ Website ingestion complete - {self.stats['total_documents']} documents from "
+            f"Website ingestion complete - {self.stats['total_documents']} documents from "
             f"{self.stats['total_websites']} websites"
         )
 

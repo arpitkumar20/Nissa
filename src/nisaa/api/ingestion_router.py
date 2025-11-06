@@ -29,10 +29,10 @@ def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
         except json.JSONDecodeError:
             credentials = ast.literal_eval(decoded_str)
 
-        logger.info("✅ Zoho credentials decoded successfully")
+        logger.info("Zoho credentials decoded successfully")
         return credentials
     except Exception as e:
-        logger.error(f"❌ Failed to decode credentials: {e}")
+        logger.error(f"Failed to decode credentials: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid credentials: {str(e)}")
 
 
@@ -55,7 +55,7 @@ def save_name(namespace: str, folder_path: str = "web_info", filename: str = "we
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
     
-    print(f"✅ Namespace '{namespace}' saved to {file_path} successfully!")
+    print(f"Namespace '{namespace}' saved to {file_path} successfully!")
     return namespace
 
 
@@ -79,7 +79,6 @@ async def run_ingestion_pipeline(
         zoho_files = []
         all_file_paths = []
         
-        # PHASE 1: ZOHO DATA EXTRACTION
         if zoho_cred_encrypted and zoho_cred_encrypted.strip():
             logger.info(f"[{job_id}] PHASE 1: ZOHO DATA EXTRACTION")
             
@@ -88,7 +87,6 @@ async def run_ingestion_pipeline(
                 zoho_client_id = decoded_creds.get("zoho_client_id")
                 zoho_client_secret = decoded_creds.get("zoho_client_secret")
                 zoho_refresh_token = decoded_creds.get("zoho_refresh_token")
-                # zoho_owner_name = decoded_creds.get("zoho_owner_name")
 
                 if not all([zoho_client_id, zoho_client_secret, zoho_refresh_token]):
                     raise ValueError("Incomplete Zoho credentials")
@@ -97,7 +95,6 @@ async def run_ingestion_pipeline(
                     client_id=zoho_client_id,
                     client_secret=zoho_client_secret,
                     refresh_token=zoho_refresh_token,
-                    # owner_name=zoho_owner_name,
                     output_dir=company_directory,
                     zoho_region=zoho_region
                 )
@@ -105,13 +102,12 @@ async def run_ingestion_pipeline(
                 zoho_stats = zoho_exporter.export_all_data()
                 zoho_files = zoho_stats["json_file_paths"]
                 
-                logger.info(f"[{job_id}] ✅ Zoho: {len(zoho_files)} files exported")
+                logger.info(f"[{job_id}] Zoho: {len(zoho_files)} files exported")
                 
             except Exception as zoho_error:
-                logger.error(f"[{job_id}] ❌ Zoho extraction failed: {zoho_error}")
+                logger.error(f"[{job_id}] Zoho extraction failed: {zoho_error}")
                 raise
         
-        # PHASE 2: S3 FILE DOWNLOAD
         if len(s3_file_keys_list) > 0:
             logger.info(f"[{job_id}] PHASE 2: S3 FILE DOWNLOAD")
             
@@ -123,8 +119,7 @@ async def run_ingestion_pipeline(
             
             all_file_paths.extend(downloaded_s3_files)
             logger.info(f"[{job_id}] ✅ Downloaded {len(downloaded_s3_files)} files from S3")
-        
-        # ✅ PHASE 3: ZOHO FILE DEDUPLICATION (NEW!)
+
         zoho_info = {"new": [], "skipped": []}
         if zoho_files:
             logger.info(f"[{job_id}] PHASE 3: ZOHO FILE DEDUPLICATION")
@@ -139,16 +134,14 @@ async def run_ingestion_pipeline(
                 "new": new_zoho_reports,
                 "skipped": skipped_zoho_reports
             }
-            
-            # Only add NEW Zoho files to all_file_paths
+
             new_zoho_file_paths = [report['file_path'] for report in new_zoho_reports]
             all_file_paths.extend(new_zoho_file_paths)
             logger.info(
                 f"[{job_id}] Zoho: {len(new_zoho_reports)} new, "
                 f"{len(skipped_zoho_reports)} skipped"
             )
-        
-        # PHASE 4: REGULAR FILE DEDUPLICATION
+
         logger.info(f"[{job_id}] PHASE 4: REGULAR FILE DEDUPLICATION")
         
         new_files, skipped_files = FileDeduplicator.filter_new_files(
@@ -171,8 +164,7 @@ async def run_ingestion_pipeline(
             f"{len(skipped_files)} skipped (regular), "
             f"{len(zoho_info['skipped'])} skipped (Zoho)"
         )
-        
-        # If no new content, complete early
+
         if len(new_files) == 0 and not db_uri_list and not website_url_list:
             logger.info(f"[{job_id}] No new content to process")
             job_manager.update_job_status(
@@ -182,11 +174,9 @@ async def run_ingestion_pipeline(
                 total_vectors=0
             )
             return
-        
-        # PHASE 5: DATA INGESTION PIPELINE
+
         logger.info(f"[{job_id}] PHASE 5: DATA INGESTION PIPELINE")
 
-        # Extract only new file paths for processing
         new_file_paths = [file_info['file_path'] for file_info in new_files]
 
         logger.info(f"[{job_id}] Processing {len(new_file_paths)} new files")
@@ -200,10 +190,8 @@ async def run_ingestion_pipeline(
             proxies=None
         )
 
-        # Pass job_manager for website/database deduplication
         stats = await asyncio.to_thread(pipeline.run, job_manager, company_name)
-        
-        # PHASE 6: MARK FILES AS PROCESSED
+
         logger.info(f"[{job_id}] PHASE 6: MARKING FILES AS PROCESSED")
         
         vectors_per_file = stats['vectors_upserted'] // max(len(new_files), 1)
@@ -223,7 +211,6 @@ async def run_ingestion_pipeline(
             except Exception as e:
                 logger.error(f"[{job_id}] Failed to mark file {file_info['file_path']}: {e}")
 
-        # ✅ PHASE 7: MARK ZOHO REPORTS AS PROCESSED (NEW!)
         if zoho_info['new']:
             logger.info(f"[{job_id}] PHASE 7: MARKING ZOHO REPORTS AS PROCESSED")
             
@@ -242,7 +229,6 @@ async def run_ingestion_pipeline(
                 except Exception as e:
                     logger.error(f"[{job_id}] Failed to mark Zoho report: {e}")
 
-        # PHASE 8: MARK WEBSITES AS PROCESSED
         if hasattr(pipeline, 'website_info') and pipeline.website_info:
             logger.info(f"[{job_id}] PHASE 8: MARKING WEBSITES AS PROCESSED")
             
@@ -260,7 +246,6 @@ async def run_ingestion_pipeline(
                 except Exception as e:
                     logger.error(f"[{job_id}] Failed to mark website: {e}")
 
-        # PHASE 9: MARK DATABASES AS PROCESSED
         if hasattr(pipeline, 'db_info') and pipeline.db_info:
             logger.info(f"[{job_id}] PHASE 9: MARKING DATABASES AS PROCESSED")
             
@@ -279,24 +264,23 @@ async def run_ingestion_pipeline(
                 except Exception as e:
                     logger.error(f"[{job_id}] Failed to mark database: {e}")
 
-        # FINALIZE
         save_name(namespace=company_name)
-        
+
         job_manager.update_job_status(
             job_id,
             JobStatus.COMPLETED,
             processed_files=len(new_files),
             total_vectors=stats['vectors_upserted']
         )
-        
+
         logger.info(
-            f"[{job_id}] ✅ COMPLETED: {len(new_files)} files, "
+            f"[{job_id}] COMPLETED: {len(new_files)} files, "
             f"{stats['vectors_upserted']} vectors"
         )
-        
+
     except Exception as e:
         error_msg = f"Ingestion failed: {str(e)}"
-        logger.error(f"[{job_id}] ❌ {error_msg}", exc_info=True)
+        logger.error(f"[{job_id}] : {error_msg}", exc_info=True)
         
         job_manager.update_job_status(
             job_id,
@@ -324,13 +308,11 @@ async def create_ingestion_job(
     
     if not company_name:
         raise HTTPException(status_code=400, detail="'company_name' is required")
-    
-    # Create company directory
+
     base_directory = "data"
     company_directory = os.path.join(base_directory, company_name)
     os.makedirs(company_directory, exist_ok=True)
-    
-    # Parse S3 file keys
+
     s3_file_keys_list = []
     if s3_file_keys:
         if isinstance(s3_file_keys, list):
@@ -342,8 +324,7 @@ async def create_ingestion_job(
                     s3_file_keys_list = [str(key).strip() for key in parsed if key]
             except json.JSONDecodeError:
                 pass
-    
-    # Parse db_uris as list
+
     db_uri_list = []
     if db_uris:
         if isinstance(db_uris, list):
@@ -357,8 +338,7 @@ async def create_ingestion_job(
                     db_uri_list = [db_uris.strip()]
             except json.JSONDecodeError:
                 db_uri_list = [uri.strip() for uri in db_uris.split(",") if uri.strip()]
-
-    # Parse website_urls as list            
+          
     website_url_list = []
     if website_urls:
         if isinstance(website_urls, list):
@@ -372,8 +352,7 @@ async def create_ingestion_job(
                     website_url_list = [website_urls.strip()]
             except json.JSONDecodeError:
                 website_url_list = [url.strip() for url in website_urls.split(",") if url.strip()]
-    
-    # Create job
+
     job_manager = JobManager(get_pool())
     job_id = job_manager.create_job(
         company_name=company_name,
@@ -384,8 +363,7 @@ async def create_ingestion_job(
             "has_zoho": bool(zoho_cred_encrypted)
         }
     )
-    
-    # Schedule background task
+
     background_tasks.add_task(
         run_ingestion_pipeline,
         job_id=job_id,
@@ -398,7 +376,7 @@ async def create_ingestion_job(
         website_url_list=website_url_list
     )
     
-    logger.info(f"✅ Created job {job_id} for {company_name}")
+    logger.info(f"Created job {job_id} for {company_name}")
     
     return JSONResponse(
         status_code=202,
@@ -553,8 +531,6 @@ async def get_company_databases(company_name: str):
         if conn:
             pool.putconn(conn)
 
-
-# ✅ NEW: Get processed Zoho reports endpoint
 @router.get("/companies/{company_name}/zoho-reports")
 async def get_company_zoho_reports(company_name: str):
     """Get all processed Zoho reports for a company"""

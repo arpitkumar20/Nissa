@@ -5,7 +5,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Database configuration
 DATABASE_HOST = os.getenv("DATABASE_HOST")
 DATABASE_PORT = os.getenv("DATABASE_PORT")
 DATABASE_USER = os.getenv("DATABASE_USER")
@@ -17,7 +16,6 @@ DB_URI = f"postgresql://{DATABASE_USER}:{DATABASE_PASS}@{DATABASE_HOST}:{DATABAS
 if not DB_URI:
     raise ValueError("DB_URI environment variable is not set!")
 
-# Connection pool
 _pg_pool: Optional[pool.SimpleConnectionPool] = None
 
 
@@ -70,7 +68,6 @@ def initialize_db():
         pool = get_pool()
         conn = pool.getconn()
         with conn.cursor() as cur:
-            # Messages table
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS messages (
@@ -89,7 +86,6 @@ def initialize_db():
                 """
             )
             
-            # Ingestion jobs table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ingestion_jobs (
                     job_id VARCHAR(50) PRIMARY KEY,
@@ -117,8 +113,7 @@ def initialize_db():
                 CREATE INDEX IF NOT EXISTS idx_job_created 
                 ON ingestion_jobs(created_at DESC);
             """)
-            
-            # Processed files table
+
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS processed_files (
                     id SERIAL PRIMARY KEY,
@@ -144,7 +139,6 @@ def initialize_db():
                 ON processed_files(company_name, job_id);
             """)
 
-            # Processed websites table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS processed_websites (
                     id SERIAL PRIMARY KEY,
@@ -169,7 +163,6 @@ def initialize_db():
                 ON processed_websites(company_name, job_id);
             """)
             
-            # Processed databases table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS processed_databases (
                     id SERIAL PRIMARY KEY,
@@ -195,7 +188,6 @@ def initialize_db():
                 ON processed_databases(company_name, job_id);
             """)
             
-            # ✅ NEW: Processed Zoho reports table
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS processed_zoho_reports (
                     id SERIAL PRIMARY KEY,
@@ -222,11 +214,11 @@ def initialize_db():
             """)
             
         conn.commit()
-        logger.info("✅ Database tables initialized")
+        logger.info("Database tables initialized")
     except Exception as e:
         if conn:
             conn.rollback()
-        logger.error(f"❌ Failed to initialize database: {e}")
+        logger.error(f"Failed to initialize database: {e}")
         raise e
     finally:
         if conn:

@@ -35,7 +35,6 @@ class DataIngestionPipeline:
         self.db_uris = db_uris or []
         self.website_urls = website_urls or []
 
-        # Initialize components
         self.document_loader = None
         if directory_path:
             self.document_loader = DocumentLoader(directory_path, company_namespace)
@@ -58,7 +57,6 @@ class DataIngestionPipeline:
         self.embedding_service = EmbeddingService()
         self.vector_store = VectorStoreService()
 
-        # Text splitter
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=int(os.getenv("CHUNK_SIZE", "1000")),
             chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "200")),
@@ -66,7 +64,6 @@ class DataIngestionPipeline:
             separators=["\n\n", "\n", ". ", " ", ""],
         )
 
-        # Statistics
         self.stats = {
             "company": company_namespace,
             "total_documents": 0,
@@ -137,7 +134,6 @@ class DataIngestionPipeline:
     def process_document(self, doc: Document) -> Optional[Document]:
         """Process single document"""
         try:
-            # Skip preprocessing for database documents
             if doc.metadata.get("source_type") == "database":
                 doc.metadata["company_namespace"] = self.company_namespace
                 doc.metadata["processed_at"] = datetime.now().isoformat()
@@ -171,11 +167,10 @@ class DataIngestionPipeline:
         """OPTIMIZED: Load and process with progress bars + website deduplication"""
         raw_documents = []
 
-        print("\n📄 Loading source documents...")
+        print("\n Loading source documents...")
 
-        # Load files (already deduplicated)
         if self.document_loader:
-            with tqdm(total=1, desc="📂 Files", leave=False) as pbar:
+            with tqdm(total=1, desc="Files", leave=False) as pbar:
                 try:
                     if self.file_paths:
                         docs = self.document_loader.load_specific_files(self.file_paths)
@@ -189,24 +184,11 @@ class DataIngestionPipeline:
                     logger.error(f"File loading failed: {e}")
                 pbar.update(1)
 
-        # Load databases
-        # if self.sql_ingester and self.db_uris:
-        #     with tqdm(total=1, desc="🗄️ Databases", leave=False) as pbar:
-        #         try:
-        #             docs = self.sql_ingester.ingest_multiple_databases(self.db_uris)
-        #             raw_documents.extend(docs)
-        #             self.stats["database_documents"] = len(docs)
-        #             pbar.set_postfix_str(f"{len(docs)} docs")
-        #         except Exception as e:
-        #             logger.error(f"Database loading failed: {e}")
-        #         pbar.update(1)
-
         self.stats["total_documents"] = len(raw_documents)
-        print(f"✅ Loaded {len(raw_documents)} documents")
+        print(f"Loaded {len(raw_documents)} documents")
 
-        # Process documents
         if raw_documents:
-            print(f"\n📄 Processing {len(raw_documents)} documents...")
+            print(f"\n Processing {len(raw_documents)} documents...")
             processed_documents = []
 
             with tqdm(total=len(raw_documents), desc="Processing", unit="doc") as pbar:
@@ -233,7 +215,7 @@ class DataIngestionPipeline:
                         pbar.update(1)
                         pbar.set_postfix_str(f"{self.stats['processed_documents']} OK")
 
-            print(f"✅ Processed {len(processed_documents)} documents")
+            print(f"Processed {len(processed_documents)} documents")
             return processed_documents
 
         return []
@@ -243,9 +225,8 @@ class DataIngestionPipeline:
         if not self.website_ingester or not self.website_urls:
             return []
         
-        print("\n🌐 Loading and deduplicating websites...")
+        print("\n Loading and deduplicating websites...")
         
-        # Load all websites first (get documents per URL)
         website_documents_map = {}
         
         with tqdm(total=len(self.website_urls), desc="🌐 Scraping", leave=False) as pbar:
@@ -259,7 +240,6 @@ class DataIngestionPipeline:
                     logger.error(f"Failed to scrape {url}: {e}")
                     pbar.update(1)
         
-        # Deduplicate websites
         new_websites, skipped_websites = WebsiteDeduplicator.filter_new_websites(
             website_urls=self.website_urls,
             website_documents_map=website_documents_map,
@@ -267,19 +247,17 @@ class DataIngestionPipeline:
             company_name=company_name
         )
         
-        # Store website info for later marking
         self.website_info = {
             "new": new_websites,
             "skipped": skipped_websites
         }
         
-        # Collect all documents from new websites
         all_website_docs = []
         for website in new_websites:
             all_website_docs.extend(website['documents'])
         
         self.stats["website_documents"] = len(all_website_docs)
-        logger.info(f"✅ {len(all_website_docs)} documents from {len(new_websites)} new websites")
+        logger.info(f"{len(all_website_docs)} documents from {len(new_websites)} new websites")
         
         return all_website_docs
     
@@ -288,22 +266,19 @@ class DataIngestionPipeline:
         if not self.sql_ingester or not self.db_uris:
             return []
         
-        print("\n🗄️ Loading and deduplicating databases...")
+        print("\n Loading and deduplicating databases...")
         
-        # Deduplicate databases
         new_databases, skipped_databases = DBDeduplicator.filter_new_databases(
             db_uris=self.db_uris,
             job_manager=job_manager,
             company_name=company_name
         )
         
-        # Store database info for later marking
         self.db_info = {
             "new": new_databases,
             "skipped": skipped_databases
         }
         
-        # Process only new databases
         all_db_docs = []
         if new_databases:
             new_db_uris = [db['db_uri'] for db in new_databases]
@@ -318,13 +293,13 @@ class DataIngestionPipeline:
                 pbar.update(1)
         
         self.stats["database_documents"] = len(all_db_docs)
-        logger.info(f"✅ {len(all_db_docs)} documents from {len(new_databases)} new databases")
+        logger.info(f"{len(all_db_docs)} documents from {len(new_databases)} new databases")
         
         return all_db_docs
 
     def process_json_files(self) -> tuple:
         """
-        ✅ UPDATED: Process JSON files with Zoho awareness
+        UPDATED: Process JSON files with Zoho awareness
         
         Zoho files have already been deduplicated by content hash,
         so we only process the new ones passed to the pipeline
@@ -332,7 +307,6 @@ class DataIngestionPipeline:
         if not self.document_loader:
             return [], []
 
-        # Filter JSON files from file_paths (already deduplicated)
         if self.file_paths:
             json_files = [f for f in self.file_paths if f.lower().endswith('.json')]
         else:
@@ -341,10 +315,7 @@ class DataIngestionPipeline:
         if not json_files:
             return [], []
 
-        print(f"\n📊 Processing {len(json_files)} JSON files...")
-        
-        # ✅ Note: Zoho JSON files here have already passed deduplication
-        # They are guaranteed to be NEW or CHANGED content
+        print(f"\n Processing {len(json_files)} JSON files...")
 
         all_chunks = []
         all_entities = []
@@ -362,7 +333,7 @@ class DataIngestionPipeline:
                 pbar.update(1)
 
         self.stats["json_chunks"] = len(all_chunks)
-        print(f"✅ Created {len(all_chunks)} JSON chunks")
+        print(f"Created {len(all_chunks)} JSON chunks")
 
         return all_chunks, all_entities
 
@@ -371,25 +342,25 @@ class DataIngestionPipeline:
         if not documents:
             return [], [], []
 
-        print(f"\n📄 Chunking {len(documents)} documents...")
+        print(f"\n Chunking {len(documents)} documents...")
 
         with tqdm(total=1, desc="Chunking", leave=False) as pbar:
             chunks = self.text_splitter.split_documents(documents)
             self.stats["total_chunks"] = len(chunks)
             pbar.update(1)
 
-        print(f"✅ Created {len(chunks)} chunks")
+        print(f" Created {len(chunks)} chunks")
 
         # Extract data
         texts = [chunk.page_content for chunk in chunks]
         metadatas = [chunk.metadata for chunk in chunks]
 
         # Generate embeddings SEQUENTIALLY (updated service handles this)
-        print(f"\n📄 Generating embeddings for {len(texts)} chunks...")
+        print(f"\n Generating embeddings for {len(texts)} chunks...")
         embeddings = self.embedding_service.generate_for_documents(texts)
 
         self.stats["total_embeddings"] = len(embeddings)
-        print(f"✅ Generated {len(embeddings)} embeddings")
+        print(f" Generated {len(embeddings)} embeddings")
 
         return texts, embeddings, metadatas
 
@@ -406,9 +377,8 @@ class DataIngestionPipeline:
         namespace = self.company_namespace
         total_upserted = 0
 
-        # Store standard documents
         if texts and embeddings:
-            print(f"\n📄 Storing {len(texts)} document vectors...")
+            print(f"\n Storing {len(texts)} document vectors...")
 
             with tqdm(total=1, desc="Preparing vectors", leave=False) as pbar:
                 ids, vectors, processed_metadatas = (
@@ -426,11 +396,11 @@ class DataIngestionPipeline:
                 int(os.getenv("PINECONE_BATCH_SIZE", "100")),
             )
             total_upserted += upserted
-            print(f"✅ Stored {upserted} vectors")
+            print(f"Stored {upserted} vectors")
 
         # Store JSON chunks
         if json_chunks and json_embeddings:
-            print(f"\n📄 Storing {len(json_chunks)} JSON vectors...")
+            print(f"\n Storing {len(json_chunks)} JSON vectors...")
 
             with tqdm(total=1, desc="Preparing JSON vectors", leave=False) as pbar:
                 json_vectors = self.vector_store.prepare_json_vectors(
@@ -442,21 +412,19 @@ class DataIngestionPipeline:
                 json_vectors, namespace, 100
             )
             total_upserted += upserted
-            print(f"✅ Stored {upserted} JSON vectors")
+            print(f"Stored {upserted} JSON vectors")
 
         self.stats["vectors_upserted"] = total_upserted
 
-        # Verify
-        print("\n📄 Verifying upload...")
+        print("\n Verifying upload...")
         self.vector_store.verify_upsert(namespace, total_upserted)
 
     def run(self, job_manager=None, company_name=None) -> Dict[str, Any]:
         """Execute pipeline with file AND website deduplication"""
         start_time = datetime.now()
 
-        # ✅ CRITICAL FIX: Initialize ALL variables at the start
         processed_documents = []
-        website_docs = []  # ✅ Added this
+        website_docs = []
         texts = []
         embeddings = []
         metadatas = []
@@ -465,60 +433,48 @@ class DataIngestionPipeline:
         json_entities = []
 
         print("\n" + "="*70)
-        print(f"🚀 SEQUENTIAL DATA INGESTION: {self.company_namespace.upper()}")
+        print(f"SEQUENTIAL DATA INGESTION: {self.company_namespace.upper()}")
         print("="*70)
-
-        # =================================================================
-        # PHASE 1: PROCESS STANDARD DOCUMENTS (Files, DB, Websites)
-        # =================================================================
         print("\n" + "="*70)
-        print("📁 PHASE 1: LOADING & PROCESSING STANDARD DOCUMENTS")
+        print("PHASE 1: LOADING & PROCESSING STANDARD DOCUMENTS")
         print("="*70)
 
-        # PHASE 1A: Website Deduplication (if applicable)
         if job_manager and company_name and self.website_urls:
             print("\n" + "="*70)
-            print("🌐 PHASE 1A: WEBSITE DEDUPLICATION")
+            print("PHASE 1A: WEBSITE DEDUPLICATION")
             print("="*70)
             website_docs = self.load_and_deduplicate_websites(job_manager, company_name)
         
-        # PHASE 1B: Database Deduplication (if applicable)
         db_docs = []
         if job_manager and company_name and self.db_uris:
             print("\n" + "="*70)
-            print("🗄️ PHASE 1B: DATABASE DEDUPLICATION")
+            print("PHASE 1B: DATABASE DEDUPLICATION")
             print("="*70)
             db_docs = self.load_and_deduplicate_databases(job_manager, company_name)
         
-        # PHASE 1C: Load standard documents (files only)
         processed_documents = self.load_and_process_standard_documents()
         
-        # Merge database documents with processed documents
         if db_docs:
             processed_documents.extend(db_docs)
             self.stats["total_documents"] += len(db_docs)
         
-        # Merge website documents with processed documents
         if website_docs:
             processed_documents.extend(website_docs)
             self.stats["total_documents"] += len(website_docs)
 
-        # Process and store if we have documents
         if processed_documents:
-            # Chunk and embed standard documents
             texts, embeddings, metadatas = self.chunk_and_embed_documents(
                 processed_documents
             )
 
-            # Store standard documents BEFORE moving to JSON
             if texts and embeddings:
                 print("\n" + "="*70)
-                print("💾 STORING STANDARD DOCUMENT VECTORS")
+                print("STORING STANDARD DOCUMENT VECTORS")
                 print("="*70)
                 
                 namespace = self.company_namespace
                 
-                print(f"\n📄 Storing {len(texts)} document vectors...")
+                print(f"\n Storing {len(texts)} document vectors...")
                 with tqdm(total=1, desc="Preparing vectors", leave=False) as pbar:
                     ids, vectors, processed_metadatas = (
                         self.vector_store.prepare_document_vectors(
@@ -535,40 +491,32 @@ class DataIngestionPipeline:
                     int(os.getenv("PINECONE_BATCH_SIZE", "100")),
                 )
                 self.stats["vectors_upserted"] += upserted
-                print(f"✅ Stored {upserted} standard document vectors")
-                
-                # Verify standard documents
-                print(f"\n📄 Verifying standard document upload...")
+                print(f"Stored {upserted} standard document vectors")
+
                 self.vector_store.verify_upsert(namespace, upserted)
         else:
-            print("\n⚠️ No standard documents to process (all skipped or none provided)")
+            print("\n No standard documents to process (all skipped or none provided)")
 
-        # =================================================================
-        # PHASE 2: PROCESS JSON FILES (Zoho data)
-        # ONLY STARTS AFTER PHASE 1 IS COMPLETE
-        # =================================================================
+
         print("\n" + "="*70)
-        print("📊 PHASE 2: PROCESSING JSON FILES (ZOHO DATA)")
+        print("PHASE 2: PROCESSING JSON FILES (ZOHO DATA)")
         print("="*70)
         
         json_chunks, json_entities = self.process_json_files()
 
         if json_chunks:
-            # Embed JSON chunks
-            print(f"\n📄 Generating embeddings for {len(json_chunks)} JSON chunks...")
+            print(f"\n Generating embeddings for {len(json_chunks)} JSON chunks...")
             json_embeddings = self.embedding_service.generate_for_json_chunks(
                 json_chunks
             )
-            print(f"✅ Generated {len(json_embeddings)} JSON embeddings")
-
-            # Store JSON vectors SEPARATELY
+            print(f"Generated {len(json_embeddings)} JSON embeddings")
             print("\n" + "="*70)
-            print("💾 STORING JSON VECTORS")
+            print("STORING JSON VECTORS")
             print("="*70)
             
             namespace = self.company_namespace
             
-            print(f"\n📄 Storing {len(json_chunks)} JSON vectors...")
+            print(f"\n Storing {len(json_chunks)} JSON vectors...")
             with tqdm(total=1, desc="Preparing JSON vectors", leave=False) as pbar:
                 json_vectors = self.vector_store.prepare_json_vectors(
                     json_chunks, json_embeddings, json_entities, namespace
@@ -579,22 +527,18 @@ class DataIngestionPipeline:
                 json_vectors, namespace, 100
             )
             self.stats["vectors_upserted"] += upserted
-            print(f"✅ Stored {upserted} JSON vectors")
+            print(f"Stored {upserted} JSON vectors")
             
-            # Verify JSON upload
-            print(f"\n📄 Verifying JSON upload...")
+            print(f"\n Verifying JSON upload...")
             self.vector_store.verify_upsert(namespace, self.stats["vectors_upserted"])
         else:
-            print("\n⚠️ No JSON files to process")
+            print("\n No JSON files to process")
 
-        # =================================================================
-        # FINAL STATISTICS
-        # =================================================================
         end_time = datetime.now()
         self.stats["processing_time"] = (end_time - start_time).total_seconds()
 
         print("\n" + "="*70)
-        print("📊 FINAL STATISTICS")
+        print("FINAL STATISTICS")
         print("="*70)
         print(f"   Total Documents: {self.stats['total_documents']}")
         print(f"   - Files: {self.stats['file_documents']}")

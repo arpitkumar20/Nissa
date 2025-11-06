@@ -40,14 +40,9 @@ from src.nisaa.helpers.db import DB_URI
 
 logger = logging.getLogger(__name__)
 
-# ============================================================================
-# Conditional Edge Functions
-# ============================================================================
-
-
 def should_retry_with_history(state: GraphState) -> str:
     """
-    ✅ NEW: Conditional routing based on uncertainty detection
+    NEW: Conditional routing based on uncertainty detection
     
     Returns:
         "load_history" if uncertain, "save_memory" if confident
@@ -55,17 +50,11 @@ def should_retry_with_history(state: GraphState) -> str:
     needs_history = state.get("needs_history", False)
     
     if needs_history:
-        logger.info("🔄 Routing to load_history (uncertainty detected)")
+        logger.info("Routing to load_history (uncertainty detected)")
         return "load_history"
     else:
-        logger.info("✅ Routing to save_memory (confident response)")
+        logger.info("Routing to save_memory (confident response)")
         return "save_memory"
-
-
-# ============================================================================
-# Graph Builder
-# ============================================================================
-
 
 def create_rag_graph():
     """
@@ -96,79 +85,30 @@ def create_rag_graph():
     Returns:
         Compiled StateGraph ready for invocation
     """
-
-    # Initialize graph builder
     builder = StateGraph(GraphState)
-
-    # ============= ADD NODES =============
     logger.info("Building RAG graph with NEW FLOW...")
 
-    # Core nodes (always executed)
     builder.add_node("detect_id", detect_id_or_phone)
     builder.add_node("embed", generate_embedding)
     builder.add_node("retrieve", retrieve_documents)
     builder.add_node("format", format_context)
     builder.add_node("generate", generate_response)
     builder.add_node("detect_uncertainty", detect_uncertainty)
-    
-    # Conditional nodes (only if uncertain)
+
     builder.add_node("load_history", load_chat_history)
     builder.add_node("retry_generate", retry_generate_with_history)
     
-    # Final node (always executed)
     builder.add_node("save_memory", save_to_memory)
-
-    # ============= DEFINE EDGES =============
     
-    # Linear flow up to uncertainty detection
     builder.add_edge(START, "detect_id")
     builder.add_edge("detect_id", "embed")
     builder.add_edge("embed", "retrieve")
     builder.add_edge("retrieve", "format")
     builder.add_edge("format", "generate")
     builder.add_edge("generate", END)
-    
-    # # ✅ CONDITIONAL BRANCH: Based on uncertainty
-    # builder.add_conditional_edges(
-    #     "detect_uncertainty",
-    #     should_retry_with_history,
-    #     {
-    #         "load_history": "load_history",  # If uncertain
-    #         "save_memory": "save_memory"     # If confident
-    #     }
-    # )
-    
-    # # Retry path (only if uncertain)
-    # builder.add_edge("load_history", "retry_generate")
-    # builder.add_edge("retry_generate", "save_memory")
-    
-    # # Final edge
-    # builder.add_edge("save_memory", END)
 
-    # ============= SETUP CHECKPOINTER =============
-    # try:
-    #     checkpointer = PostgresSaver.from_conn_string(DB_URI)
-    #     checkpointer.setup()
-    #     logger.info("PostgreSQL checkpointer initialized")
-    # except Exception as e:
-    #     logger.warning(f"Checkpointer setup failed: {e}. Using memory checkpointer.")
-    #     from langgraph.checkpoint.memory import MemorySaver
-    #     checkpointer = MemorySaver()
-
-    # ============= COMPILE GRAPH =============
-    # graph = builder.compile(checkpointer=checkpointer)
     graph = builder.compile()
-
-    logger.info("✅ RAG Graph compiled successfully with NEW FLOW")
-    logger.info("📊 Flow: detect_id → embed → retrieve → format → generate → detect_uncertainty → [conditional] → save_memory")
-
     return graph
-
-
-# ============================================================================
-# Graph Execution Wrapper
-# ============================================================================
-
 
 def execute_rag_pipeline(
     user_query: str, 
@@ -179,7 +119,7 @@ def execute_rag_pipeline(
     """
     Execute the RAG pipeline for a user query
     
-    ✅ FIXED: Now properly passes company_namespace through state
+    FIXED: Now properly passes company_namespace through state
 
     Args:
         user_query: User's input message
@@ -193,39 +133,28 @@ def execute_rag_pipeline(
     start_time = time.time()
 
     try:
-        # ✅ FIX: Pass namespace to initial state
         initial_state = create_initial_state(
             user_query, 
             user_phone_number, 
             company_namespace
         )
 
-        # Configuration with thread ID
         config = {"configurable": {"thread_id": str(user_phone_number)}}
-
-        # Create and invoke graph
         graph = create_rag_graph()
 
-        logger.info(f"Executing RAG pipeline for thread: {user_phone_number}, namespace: {company_namespace}")
-
-        # Invoke graph
         final_state = graph.invoke(initial_state, config)
 
-        # Calculate processing time
         processing_time = time.time() - start_time
         final_state["processing_time"] = processing_time
 
-        # Log flow stats
         used_history = final_state.get("needs_history", False)
-        logger.info(f"✅ Pipeline completed in {processing_time:.2f}s")
-        logger.info(f"   - History used: {used_history}")
-        logger.info(f"   - Search type: {final_state.get('search_type', 'unknown')}")
-        logger.info(f"   - Documents: {final_state.get('num_documents', 0)}")
+
+        logger.info(f"Pipeline completed in {processing_time:.2f}s - History used: {used_history} - Search type: {final_state.get('search_type', 'unknown')} - Documents: {final_state.get('num_documents', 0)}")
 
         return final_state
 
     except Exception as e:
-        logger.error(f"❌ Pipeline execution failed: {e}", exc_info=True)
+        logger.error(f"Pipeline execution failed: {e}", exc_info=True)
         processing_time = time.time() - start_time
 
         return {
@@ -235,12 +164,6 @@ def execute_rag_pipeline(
             "thread_id": str(user_phone_number),
             "company_namespace": company_namespace
         }
-
-
-# ============================================================================
-# Streaming Support (Future Enhancement)
-# ============================================================================
-
 
 async def stream_rag_pipeline(
     user_query: str, 
@@ -264,14 +187,12 @@ async def stream_rag_pipeline(
     async for event in graph.astream(initial_state, config):
         for node_name, node_state in event.items():
             if node_name == "generate" or node_name == "retry_generate":
-                # Stream the response
                 yield {
                     "type": "response",
                     "content": node_state.get("model_response", ""),
                     "used_history": node_name == "retry_generate"
                 }
             else:
-                # Stream progress updates
                 yield {
                     "type": "progress", 
                     "node": node_name, 

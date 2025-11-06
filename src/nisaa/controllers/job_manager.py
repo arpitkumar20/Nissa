@@ -50,13 +50,13 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"✅ Created job {job_id} for company {company_name}")
+            logger.info(f"Created job {job_id} for company {company_name}")
             return job_id
             
         except Exception as e:
             if conn:
                 conn.rollback()
-            logger.error(f"❌ Failed to create job: {e}")
+            logger.error(f"Failed to create job: {e}")
             raise
         finally:
             if conn:
@@ -104,12 +104,12 @@ class JobManager:
                 cur.execute(query, params)
             
             conn.commit()
-            logger.info(f"✅ Updated job {job_id} status to {status}")
+            logger.info(f"Updated job {job_id} status to {status}")
             
         except Exception as e:
             if conn:
                 conn.rollback()
-            logger.error(f"❌ Failed to update job {job_id}: {e}")
+            logger.error(f"Failed to update job {job_id}: {e}")
             raise
         finally:
             if conn:
@@ -167,7 +167,7 @@ class JobManager:
                 return job_data
                 
         except Exception as e:
-            logger.error(f"❌ Failed to get job status: {e}")
+            logger.error(f"Failed to get job status: {e}")
             return None
         finally:
             if conn:
@@ -209,7 +209,7 @@ class JobManager:
                 }
                 
         except Exception as e:
-            logger.error(f"❌ Failed to check file: {e}")
+            logger.error(f"Failed to check file: {e}")
             return None
         finally:
             if conn:
@@ -249,12 +249,12 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"✅ Marked file as processed: {file_path}")
+            logger.info(f"Marked file as processed: {file_path}")
             
         except Exception as e:
             if conn:
                 conn.rollback()
-            logger.error(f"❌ Failed to mark file processed: {e}")
+            logger.error(f"Failed to mark file processed: {e}")
             raise
         finally:
             if conn:
@@ -295,7 +295,7 @@ class JobManager:
                 }
                 
         except Exception as e:
-            logger.error(f"❌ Failed to check website: {e}")
+            logger.error(f"Failed to check website: {e}")
             return None
         finally:
             if conn:
@@ -335,12 +335,12 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"✅ Marked website as processed: {website_url}")
+            logger.info(f"Marked website as processed: {website_url}")
             
         except Exception as e:
             if conn:
                 conn.rollback()
-            logger.error(f"❌ Failed to mark website processed: {e}")
+            logger.error(f"Failed to mark website processed: {e}")
             raise
         finally:
             if conn:
@@ -382,7 +382,7 @@ class JobManager:
                 }
                 
         except Exception as e:
-            logger.error(f"❌ Failed to check database: {e}")
+            logger.error(f"Failed to check database: {e}")
             return None
         finally:
             if conn:
@@ -422,18 +422,16 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"✅ Marked database as processed: {db_name}")
+            logger.info(f"Marked database as processed: {db_name}")
             
         except Exception as e:
             if conn:
                 conn.rollback()
-            logger.error(f"❌ Failed to mark database processed: {e}")
+            logger.error(f"Failed to mark database processed: {e}")
             raise
         finally:
             if conn:
                 self.pool.putconn(conn)
-
-    # ✅ NEW: Zoho report tracking methods
     
     def is_zoho_report_processed(
         self,
@@ -475,7 +473,7 @@ class JobManager:
                 }
                 
         except Exception as e:
-            logger.error(f"❌ Failed to check Zoho report: {e}")
+            logger.error(f"Failed to check Zoho report: {e}")
             return None
         finally:
             if conn:
@@ -517,12 +515,12 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"✅ Marked Zoho report as processed: {report_name}")
-            
+            logger.info(f"Marked Zoho report as processed: {report_name}")
+
         except Exception as e:
             if conn:
                 conn.rollback()
-            logger.error(f"❌ Failed to mark Zoho report processed: {e}")
+            logger.error(f"Failed to mark Zoho report processed: {e}")
             raise
         finally:
             if conn:

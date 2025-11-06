@@ -186,7 +186,7 @@ Natural language (plain text, all exact values and nested list items included):"
                 else:
                     return (entity_id, f"Error processing {entity_id}: {str(e)}")
     
-    logger.info(f"🚀 Processing {len(entities)} JSON entities in parallel (max {max_workers} workers)...")
+    logger.info(f"Processing {len(entities)} JSON entities in parallel (max {max_workers} workers)...")
     
     results = [None] * len(entities)
     
@@ -202,7 +202,7 @@ Natural language (plain text, all exact values and nested list items included):"
             completed += 1
             
             if completed % 10 == 0 or completed == len(entities):
-                logger.info(f"   ✓ Completed {completed}/{len(entities)} entities")
+                logger.info(f"Completed {completed}/{len(entities)} entities")
     
     return results
 
@@ -270,27 +270,27 @@ class JSONProcessor:
         Returns:
             Tuple of (chunks, entities) for metadata extraction
         """
-        logger.info(f"📄 Processing JSON file: {file_path}")
+        logger.info(f"Processing JSON file: {file_path}")
         
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
-        logger.info(f"📄 Flattening JSON...")
+        logger.info(f"Flattening JSON...")
         flattened_data = flatten_json(data, max_depth=100)
-        logger.info(f"✅ Flattened {len(flattened_data)} keys")
+        logger.info(f"Flattened {len(flattened_data)} keys")
         
-        logger.info(f"🔍 Identifying entities...")
+        logger.info(f"Identifying entities...")
         entities = identify_entities(flattened_data)
-        logger.info(f"✅ Found {len(entities)} entities")
+        logger.info(f"Found {len(entities)} entities")
         
-        logger.info(f"🤖 Converting to natural language...")
+        logger.info(f"Converting to natural language...")
         entity_texts = convert_to_natural_language_batch(
             entities, self.openai_api_key, self.model, self.max_workers
         )
-        logger.info(f"✅ Converted all entities")
+        logger.info(f"Converted all entities")
         
-        logger.info(f"📦 Chunking data...")
+        logger.info(f"Chunking data...")
         chunks = chunk_by_entities(entity_texts, max_chunk_size=8000, entities_per_chunk=1)
-        logger.info(f"✅ Created {len(chunks)} chunks")
+        logger.info(f"Created {len(chunks)} chunks")
         
         return chunks, entities

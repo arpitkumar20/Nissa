@@ -27,7 +27,7 @@ class FileDeduplicator:
             
             return hash_func.hexdigest()
         except Exception as e:
-            logger.error(f"❌ Failed to hash file {file_path}: {e}")
+            logger.error(f"Failed to hash file {file_path}: {e}")
             raise
     
     @staticmethod
@@ -46,7 +46,7 @@ class FileDeduplicator:
                 "modified_time": stat.st_mtime
             }
         except Exception as e:
-            logger.error(f"❌ Failed to get file info for {file_path}: {e}")
+            logger.error(f"Failed to get file info for {file_path}: {e}")
             raise
     
     @staticmethod
@@ -61,7 +61,7 @@ class FileDeduplicator:
         Returns:
             Tuple of (new_files, skipped_files)
         """
-        logger.info(f"🔍 Checking {len(file_paths)} files for duplicates...")
+        logger.info(f"Checking {len(file_paths)} files for duplicates...")
         
         new_files = []
         skipped_files = []
@@ -70,7 +70,6 @@ class FileDeduplicator:
             try:
                 file_info = FileDeduplicator.get_file_info(file_path)
                 
-                # Check if file already processed
                 existing = job_manager.is_file_processed(
                     company_name=company_name,
                     file_path=file_path,
@@ -79,7 +78,7 @@ class FileDeduplicator:
                 
                 if existing:
                     logger.info(
-                        f"⏭️  Skipping {file_info['file_name']} "
+                        f"Skipping {file_info['file_name']} "
                         f"(already processed in job {existing['job_id']})"
                     )
                     skipped_files.append({
@@ -93,11 +92,11 @@ class FileDeduplicator:
                     new_files.append(file_info)
                     
             except Exception as e:
-                logger.warning(f"⚠️ Error processing {file_path}: {e}")
+                logger.warning(f"Error processing {file_path}: {e}")
                 continue
         
         logger.info(
-            f"✅ Deduplication complete: "
+            f"Deduplication complete: "
             f"{len(new_files)} new, {len(skipped_files)} skipped"
         )
         
@@ -121,17 +120,15 @@ class WebsiteDeduplicator:
         hash_func = hashlib.md5()
         
         try:
-            # Sort documents by source URL for consistency
             sorted_docs = sorted(documents, key=lambda d: d.metadata.get('source', ''))
             
-            # Hash combined content
             for doc in sorted_docs:
                 content = doc.page_content.encode('utf-8')
                 hash_func.update(content)
             
             return hash_func.hexdigest()
         except Exception as e:
-            logger.error(f"❌ Failed to hash website content: {e}")
+            logger.error(f"Failed to hash website content: {e}")
             raise
     
     @staticmethod
@@ -155,7 +152,7 @@ class WebsiteDeduplicator:
             new_websites: List of dicts with url, documents, content_hash
             skipped_websites: List of dicts with url, reason, previous_job
         """
-        logger.info(f"🔍 Checking {len(website_urls)} websites for duplicates...")
+        logger.info(f"Checking {len(website_urls)} websites for duplicates...")
         
         new_websites = []
         skipped_websites = []
@@ -164,14 +161,12 @@ class WebsiteDeduplicator:
             documents = website_documents_map.get(url, [])
             
             if not documents:
-                logger.warning(f"⚠️ No documents found for {url}")
+                logger.warning(f"No documents found for {url}")
                 continue
             
             try:
-                # Compute content hash
                 content_hash = WebsiteDeduplicator.compute_content_hash(documents)
                 
-                # Check if already processed
                 existing = job_manager.is_website_processed(
                     company_name=company_name,
                     website_url=url,
@@ -180,7 +175,7 @@ class WebsiteDeduplicator:
                 
                 if existing:
                     logger.info(
-                        f"⏭️  Skipping {url} "
+                        f"Skipping {url} "
                         f"(already processed in job {existing['job_id']})"
                     )
                     skipped_websites.append({
@@ -201,11 +196,11 @@ class WebsiteDeduplicator:
                     })
                     
             except Exception as e:
-                logger.warning(f"⚠️ Error processing {url}: {e}")
+                logger.warning(f"Error processing {url}: {e}")
                 continue
         
         logger.info(
-            f"✅ Website deduplication complete: "
+            f"Website deduplication complete: "
             f"{len(new_websites)} new, {len(skipped_websites)} skipped"
         )
         
@@ -227,19 +222,15 @@ class DBDeduplicator:
             MD5 hash of sanitized connection string
         """
         try:
-            # Parse URI and remove password for hashing
-            # This ensures same DB is identified even if password changes
             from urllib.parse import urlparse, urlunparse
             
             parsed = urlparse(db_uri)
-            # Remove password from netloc
             netloc_without_pwd = parsed.hostname or ''
             if parsed.port:
                 netloc_without_pwd += f":{parsed.port}"
             if parsed.username:
                 netloc_without_pwd = f"{parsed.username}@{netloc_without_pwd}"
             
-            # Reconstruct URI without password
             sanitized = urlunparse((
                 parsed.scheme,
                 netloc_without_pwd,
@@ -254,7 +245,7 @@ class DBDeduplicator:
             return hash_func.hexdigest()
             
         except Exception as e:
-            logger.error(f"❌ Failed to hash database URI: {e}")
+            logger.error(f"Failed to hash database URI: {e}")
             raise
     
     @staticmethod
@@ -274,7 +265,7 @@ class DBDeduplicator:
                 "db_hash": DBDeduplicator.compute_db_hash(db_uri)
             }
         except Exception as e:
-            logger.error(f"❌ Failed to get DB info: {e}")
+            logger.error(f"Failed to get DB info: {e}")
             raise
     
     @staticmethod
@@ -294,7 +285,7 @@ class DBDeduplicator:
         Returns:
             Tuple of (new_databases, skipped_databases)
         """
-        logger.info(f"🔍 Checking {len(db_uris)} databases for duplicates...")
+        logger.info(f"Checking {len(db_uris)} databases for duplicates...")
         
         new_databases = []
         skipped_databases = []
@@ -303,7 +294,6 @@ class DBDeduplicator:
             try:
                 db_info = DBDeduplicator.get_db_info(db_uri)
                 
-                # Check if already processed
                 existing = job_manager.is_database_processed(
                     company_name=company_name,
                     db_uri=db_uri,
@@ -312,7 +302,7 @@ class DBDeduplicator:
                 
                 if existing:
                     logger.info(
-                        f"⏭️  Skipping {db_info['db_name']} "
+                        f"Skipping {db_info['db_name']} "
                         f"(already processed in job {existing['job_id']})"
                     )
                     skipped_databases.append({
@@ -326,11 +316,11 @@ class DBDeduplicator:
                     new_databases.append(db_info)
                     
             except Exception as e:
-                logger.warning(f"⚠️ Error processing {db_uri}: {e}")
+                logger.warning(f"Error processing {db_uri}: {e}")
                 continue
         
         logger.info(
-            f"✅ Database deduplication complete: "
+            f"Database deduplication complete: "
             f"{len(new_databases)} new, {len(skipped_databases)} skipped"
         )
         
@@ -339,7 +329,7 @@ class DBDeduplicator:
 
 class ZohoDeduplicator:
     """
-    ✅ NEW: Handles Zoho JSON content hashing and deduplication
+    NEW: Handles Zoho JSON content hashing and deduplication
     
     Unlike file deduplication (which hashes the file), this hashes the 
     JSON CONTENT to detect if Zoho data has actually changed.
@@ -362,17 +352,15 @@ class ZohoDeduplicator:
             with open(json_file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # Convert to stable JSON string (sorted keys for consistency)
             json_string = json.dumps(data, sort_keys=True, ensure_ascii=False)
             
-            # Hash the content
             hash_func = hashlib.md5()
             hash_func.update(json_string.encode('utf-8'))
             
             return hash_func.hexdigest()
             
         except Exception as e:
-            logger.error(f"❌ Failed to hash Zoho JSON content: {e}")
+            logger.error(f"Failed to hash Zoho JSON content: {e}")
             raise
     
     @staticmethod
@@ -387,17 +375,12 @@ class ZohoDeduplicator:
             Dict with report_name, record_count, content_hash
         """
         try:
-            # Report name from filename
             report_name = Path(json_file_path).stem
             
-            # Load JSON to count records
             with open(json_file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             
-            # Count records (Zoho exports are always lists)
-            record_count = len(data) if isinstance(data, list) else 1
-            
-            # Compute content hash
+            record_count = len(data) if isinstance(data, list) else 1            
             content_hash = ZohoDeduplicator.compute_content_hash(json_file_path)
             
             return {
@@ -405,11 +388,11 @@ class ZohoDeduplicator:
                 "report_name": report_name,
                 "record_count": record_count,
                 "content_hash": content_hash,
-                "app_name": "Unknown"  # Will be set if available
+                "app_name": "Unknown"
             }
             
         except Exception as e:
-            logger.error(f"❌ Failed to extract Zoho report info: {e}")
+            logger.error(f"Failed to extract Zoho report info: {e}")
             raise
     
     @staticmethod
@@ -432,7 +415,7 @@ class ZohoDeduplicator:
         if not zoho_json_files:
             return [], []
         
-        logger.info(f"🔍 Checking {len(zoho_json_files)} Zoho reports for duplicates...")
+        logger.info(f"Checking {len(zoho_json_files)} Zoho reports for duplicates...")
         
         new_reports = []
         skipped_reports = []
@@ -441,7 +424,6 @@ class ZohoDeduplicator:
             try:
                 report_info = ZohoDeduplicator.extract_report_info(json_file)
                 
-                # Check if already processed (by content hash)
                 existing = job_manager.is_zoho_report_processed(
                     company_name=company_name,
                     report_name=report_info["report_name"],
@@ -450,7 +432,7 @@ class ZohoDeduplicator:
                 
                 if existing:
                     logger.info(
-                        f"⏭️  Skipping {report_info['report_name']} "
+                        f"Skipping {report_info['report_name']} "
                         f"({report_info['record_count']} records - already processed in job {existing['job_id']})"
                     )
                     skipped_reports.append({
@@ -463,16 +445,16 @@ class ZohoDeduplicator:
                 else:
                     new_reports.append(report_info)
                     logger.debug(
-                        f"✅ New report: {report_info['report_name']} "
+                        f"New report: {report_info['report_name']} "
                         f"({report_info['record_count']} records)"
                     )
                     
             except Exception as e:
-                logger.warning(f"⚠️ Error processing Zoho file {json_file}: {e}")
+                logger.warning(f"Error processing Zoho file {json_file}: {e}")
                 continue
         
         logger.info(
-            f"✅ Zoho deduplication complete: "
+            f"Zoho deduplication complete: "
             f"{len(new_reports)} new, {len(skipped_reports)} skipped"
         )
         

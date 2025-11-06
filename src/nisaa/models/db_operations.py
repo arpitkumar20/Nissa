@@ -2,7 +2,6 @@ import psycopg2
 import os
 import psycopg2.errors
 
-# --- (Your connection string and get_connection() function are correct) ---
 conn_string = (
         f"dbname='{os.environ.get('DB_NAME')}' "
         f"user='{os.environ.get('DATABASE_USER')}' "
@@ -12,8 +11,6 @@ conn_string = (
         )
 def get_connection():
         return psycopg2.connect(conn_string)
-# --- (End of your correct code) ---
-
 
 def initialize_and_save_booking(   
     patient_phone: str, 
@@ -56,10 +53,8 @@ def initialize_and_save_booking(
     try:
         with get_connection() as conn:
             with conn.cursor() as cursor:
-                # Step A: Ensure the table exists
                 cursor.execute(create_table_sql)
 
-                # Step B: Try to insert the new booking
                 cursor.execute(insert_sql, (
                     patient_phone, 
                     doctor_name, 
@@ -68,11 +63,9 @@ def initialize_and_save_booking(
                     status
                 ))
 
-                # Step C: Get the new booking ID
                 new_booking_id = cursor.fetchone()[0]
 
-            # ✅ Automatic commit on success
-        print(f"✅ Successfully created booking ID: {new_booking_id}")
+        print(f"Successfully created booking ID: {new_booking_id}")
         return new_booking_id, None
 
     except psycopg2.errors.UniqueViolation as e:
@@ -106,24 +99,18 @@ def get_booking_by_phone(patient_phone: str):
         - On error: (None, "An error occurred...")
     """
     
-    # SQL query to select all bookings matching the phone number
     sql = "SELECT * FROM bookings WHERE patient_phone = %s;"
-    
+
     bookings = []
     
     try:
         with get_connection() as conn:
-            with conn.cursor() as cursor:
-                
+            with conn.cursor() as cursor:                
                 cursor.execute(sql, (patient_phone,))
                 
-                # Get column names from the cursor description
-                column_names = [desc[0] for desc in cursor.description]
-                
-                # Fetch all rows
+                column_names = [desc[0] for desc in cursor.description]                
                 rows = cursor.fetchall()
                 
-                # Convert rows (tuples) to dictionaries
                 for row in rows:
                     bookings.append(dict(zip(column_names, row)))
         
@@ -138,7 +125,6 @@ import psycopg2
 import os
 import psycopg2.errors
 
-# --- (Your existing conn_string and get_connection() code) ---
 conn_string = (
         f"dbname='{os.environ.get('DB_NAME')}' "
         f"user='{os.environ.get('DATABASE_USER')}' "
@@ -148,8 +134,6 @@ conn_string = (
         )
 def get_connection():
         return psycopg2.connect(conn_string)
-# --- (End of your existing code) ---
-
 
 def delete_booking(
     patient_phone: str, 
@@ -167,7 +151,6 @@ def delete_booking(
         - On DB error: (None, "An error occurred...")
     """
     
-    # SQL to delete a specific row
     sql = """
     DELETE FROM bookings
     WHERE patient_phone = %s
@@ -175,11 +158,9 @@ def delete_booking(
       AND booking_date = %s
       AND booking_time = %s;
     """
-    
     rows_deleted = 0
     
     try:
-        # 'with' handles connection and commit/rollback
         with get_connection() as conn:
             with conn.cursor() as cursor:
                 
@@ -190,21 +171,15 @@ def delete_booking(
                     booking_time
                 ))
                 
-                # Get the number of rows affected
                 rows_deleted = cursor.rowcount
-                
-        # 'with' block commits here if successful
         
         if rows_deleted == 0:
-            # No row matched the criteria
             print(f"No booking found to delete for {patient_phone} with {doctor_name}")
             return 0, "No matching booking found to delete."
         else:
-            # Success
             print(f"Successfully deleted {rows_deleted} booking(s).")
             return rows_deleted, None
 
     except (Exception, psycopg2.DatabaseError) as e:
-        # 'with' block rolled back automatically
         print(f"General Error during booking deletion: {e}")
-        return None, str(e)    
+        return None, str(e)

@@ -1,18 +1,14 @@
 """
 LangGraph Node Implementations for Agentic RAG Pipeline - FIXED VERSION
 Key Changes:
-1. ✅ RAG engine created per-request with namespace (no singleton)
-2. ✅ New uncertainty detection node
-3. ✅ History loaded only when needed
-4. ✅ Retry mechanism with history
+1. RAG engine created per-request with namespace (no singleton)
+2. New uncertainty detection node
+3. History loaded only when needed
+4. Retry mechanism with history
 """
 
-import json
-import os
-import time
+
 import logging
-import re
-from typing import Dict, Any
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from src.nisaa.controllers.retrival_controller import HybridRAGQueryEngine
 from src.nisaa.graphs.state import GraphState, log_state
@@ -23,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 def get_rag_engine(namespace: str) -> HybridRAGQueryEngine:
     """
-    ✅ FIX: Create a NEW RAG engine instance for each request
+    FIX: Create a NEW RAG engine instance for each request
     
     This eliminates:
     - Race conditions between concurrent requests
@@ -39,8 +35,6 @@ def get_rag_engine(namespace: str) -> HybridRAGQueryEngine:
     if not namespace:
         raise ValueError("Namespace is required for RAG engine")
     
-    logger.info(f"🔧 Creating RAG engine for namespace: {namespace}")
-    
     return HybridRAGQueryEngine(
         namespace=namespace,
         top_k=5,
@@ -49,15 +43,9 @@ def get_rag_engine(namespace: str) -> HybridRAGQueryEngine:
         max_tokens=2000
     )
 
-
-# ============================================================================
-# NODE 1: Detect ID/Phone (MOVED TO FIRST)
-# ============================================================================
-
-
 def detect_id_or_phone(state: GraphState) -> GraphState:
     """
-    ✅ MOVED TO FIRST: Detect ID/phone before anything else
+    MOVED TO FIRST: Detect ID/phone before anything else
     This is cheap and determines our search strategy
     """
     try:
@@ -66,13 +54,8 @@ def detect_id_or_phone(state: GraphState) -> GraphState:
         query = state["user_query"]
         namespace = state["company_namespace"]
         
-        # ✅ FIX: Create engine with namespace from state
         rag_engine = get_rag_engine(namespace)
-
-        # Use RAG engine's ID detection
         id_info = rag_engine.detect_id_in_query(query)
-
-        logger.info(f"ID Detection: {id_info}")
 
         return {
             **state,
@@ -85,12 +68,6 @@ def detect_id_or_phone(state: GraphState) -> GraphState:
         logger.error(f"Error detecting ID/phone: {e}")
         return {**state, "is_id_query": False, "id_type": None, "id_value": None}
 
-
-# ============================================================================
-# NODE 2: Generate Embedding
-# ============================================================================
-
-
 def generate_embedding(state: GraphState) -> GraphState:
     """
     Generate embedding for the user query
@@ -102,10 +79,7 @@ def generate_embedding(state: GraphState) -> GraphState:
         query = state["user_query"]
         namespace = state["company_namespace"]
         
-        # ✅ FIX: Use namespace from state
         rag_engine = get_rag_engine(namespace)
-
-        # Generate embedding
         embedding = rag_engine.embeddings.embed_query(query)
 
         logger.info(f"Generated embedding of dimension {len(embedding)}")
@@ -115,11 +89,6 @@ def generate_embedding(state: GraphState) -> GraphState:
     except Exception as e:
         logger.error(f"Error generating embedding: {e}")
         return {**state, "query_embedding": None}
-
-
-# ============================================================================
-# NODE 3: Retrieve Documents (HYBRID)
-# ============================================================================
 
 
 def retrieve_documents(state: GraphState) -> GraphState:
@@ -135,10 +104,8 @@ def retrieve_documents(state: GraphState) -> GraphState:
         rag_engine = get_rag_engine(namespace)
         query = state["user_query"]
 
-        # Use hybrid retrieval from RAG engine
         docs, search_type = rag_engine.hybrid_retrieve(query, top_k=5)
 
-        # Convert docs to serializable format
         doc_list = []
         for doc in docs:
             doc_dict = {"content": doc.page_content, "metadata": doc.metadata}
@@ -164,11 +131,6 @@ def retrieve_documents(state: GraphState) -> GraphState:
         }
 
 
-# ============================================================================
-# NODE 4: Format Context
-# ============================================================================
-
-
 def format_context(state: GraphState) -> GraphState:
     """
     Format retrieved documents into context string for LLM
@@ -190,10 +152,8 @@ def format_context(state: GraphState) -> GraphState:
             content = doc["content"]
             metadata = doc["metadata"]
 
-            # Build document section
             formatted_text = f"[Document {i}]\n"
 
-            # Add metadata
             if metadata.get("record_id"):
                 formatted_text += f"Record ID: {metadata['record_id']}\n"
             if metadata.get("unique_id"):
@@ -205,7 +165,6 @@ def format_context(state: GraphState) -> GraphState:
 
             formatted_text += f"\nContent:\n{content}\n"
 
-            # Add complete structured data if available
             if metadata.get("complete_data"):
                 formatted_text += f"\nComplete Data:\n{metadata['complete_data']}\n"
 
@@ -226,14 +185,9 @@ def format_context(state: GraphState) -> GraphState:
         }
 
 
-# ============================================================================
-# NODE 5: Generate Response (INITIAL)
-# ============================================================================
-
-
 def generate_response(state: GraphState) -> GraphState:
     """
-    ✅ IMPROVED: Generate response WITHOUT history first
+    IMPROVED: Generate response WITHOUT history first
     Faster and sufficient for most queries
     """
     try:
@@ -242,30 +196,27 @@ def generate_response(state: GraphState) -> GraphState:
         namespace = state["company_namespace"]
         rag_engine = get_rag_engine(namespace)
 
-        # Build prompt with context (NO HISTORY)
         system_message = """You are a helpful AI assistant with access to a knowledge base. 
 
-Context from Knowledge Base:
-{context}
+    Context from Knowledge Base:
+    {context}
 
-Instructions:
-- Answer ONLY based on the provided context
-- If information is complete and clear, provide a confident, complete answer
-- If information is ambiguous or incomplete, clearly state: "I need to check our conversation history for more context"
-- When asked about IDs, names, or phone numbers, extract them directly from context
-- Be comprehensive and cite specific field names when relevant
-- Maintain professional tone"""
+    Instructions:
+    - Answer ONLY based on the provided context
+    - If information is complete and clear, provide a confident, complete answer
+    - If information is ambiguous or incomplete, clearly state: "I need to check our conversation history for more context"
+    - When asked about IDs, names, or phone numbers, extract them directly from context
+    - Be comprehensive and cite specific field names when relevant
+    - Maintain professional tone"""
 
         context = state["formatted_context"]
         query = state["user_query"]
 
-        # Simple prompt without history
         llm_messages = [
             SystemMessage(content=system_message.format(context=context)),
             HumanMessage(content=query)
         ]
 
-        # Generate response
         response = rag_engine.llm.invoke(llm_messages)
         answer = response.content
 
@@ -282,15 +233,9 @@ Instructions:
             "error": str(e),
         }
 
-
-# ============================================================================
-# NODE 6: Detect Uncertainty (NEW)
-# ============================================================================
-
-
 def detect_uncertainty(state: GraphState) -> GraphState:
     """
-    ✅ NEW NODE: Detect if the response indicates uncertainty
+    NEW NODE: Detect if the response indicates uncertainty
     
     Triggers retry with history if response contains uncertainty markers
     """
@@ -299,7 +244,6 @@ def detect_uncertainty(state: GraphState) -> GraphState:
         
         response = state["model_response"]
         
-        # Uncertainty markers
         uncertainty_phrases = [
             "i need to check our conversation history",
             "i don't have enough context",
@@ -317,15 +261,14 @@ def detect_uncertainty(state: GraphState) -> GraphState:
         response_lower = response.lower()
         is_uncertain = any(phrase in response_lower for phrase in uncertainty_phrases)
         
-        # Also check if response is very short (might indicate insufficient info)
         if len(response.strip()) < 50 and state["num_documents"] > 0:
             is_uncertain = True
             logger.info("Response too short - marking as uncertain")
         
         if is_uncertain:
-            logger.info("🔄 Uncertainty detected - will retry with conversation history")
+            logger.info("Uncertainty detected - will retry with conversation history")
         else:
-            logger.info("✅ Response is confident - no retry needed")
+            logger.info("Response is confident - no retry needed")
         
         return {**state, "needs_history": is_uncertain}
         
@@ -333,15 +276,9 @@ def detect_uncertainty(state: GraphState) -> GraphState:
         logger.error(f"Error in uncertainty detection: {e}")
         return {**state, "needs_history": False}
 
-
-# ============================================================================
-# NODE 7: Load Chat History (CONDITIONAL)
-# ============================================================================
-
-
 def load_chat_history(state: GraphState) -> GraphState:
     """
-    ✅ IMPROVED: Load chat history only when uncertainty detected
+    IMPROVED: Load chat history only when uncertainty detected
     Much more efficient than always loading
     """
     try:
@@ -359,15 +296,9 @@ def load_chat_history(state: GraphState) -> GraphState:
         logger.error(f"Error loading chat history: {e}")
         return {**state, "history_messages": []}
 
-
-# ============================================================================
-# NODE 8: Retry Generate with History (NEW)
-# ============================================================================
-
-
 def retry_generate_with_history(state: GraphState) -> GraphState:
     """
-    ✅ NEW NODE: Regenerate response using conversation history
+    NEW NODE: Regenerate response using conversation history
     Only called when initial response was uncertain
     """
     try:
@@ -395,7 +326,6 @@ Instructions:
         query = state["user_query"]
         history_messages = state.get("history_messages", [])
         
-        # Build history string
         history_text = ""
         for msg in history_messages:
             if isinstance(msg, HumanMessage):
@@ -403,7 +333,6 @@ Instructions:
             elif isinstance(msg, AIMessage):
                 history_text += f"Assistant: {msg.content}\n"
         
-        # Create messages with history
         llm_messages = [
             SystemMessage(content=system_message.format(
                 context=context,
@@ -411,13 +340,9 @@ Instructions:
             ))
         ]
         
-        # Add history messages
-        llm_messages.extend(history_messages)
-        
-        # Add current query
+        llm_messages.extend(history_messages)        
         llm_messages.append(HumanMessage(content=query))
 
-        # Generate response with history
         response = rag_engine.llm.invoke(llm_messages)
         answer = response.content
 
@@ -427,14 +352,7 @@ Instructions:
 
     except Exception as e:
         logger.error(f"Error in retry generation: {e}")
-        # Keep original response if retry fails
         return state
-
-
-# ============================================================================
-# NODE 9: Save to Memory
-# ============================================================================
-
 
 def save_to_memory(state: GraphState) -> GraphState:
     """
@@ -448,13 +366,9 @@ def save_to_memory(state: GraphState) -> GraphState:
         user_query = state["user_query"]
         model_response = state["model_response"]
 
-        # Initialize memory store
         memory = PostgresMemoryStore(thread_id)
 
-        # Save user message
         memory.put("user", user_query)
-
-        # Save assistant response
         memory.put("assistant", model_response)
 
         logger.info(f"Saved conversation turn to PostgreSQL for thread {thread_id}")
@@ -463,5 +377,4 @@ def save_to_memory(state: GraphState) -> GraphState:
 
     except Exception as e:
         logger.error(f"Error saving to memory: {e}")
-        # Don't fail the whole pipeline if memory save fails
         return {**state, "error": f"Memory save error: {str(e)}"}

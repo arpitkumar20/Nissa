@@ -92,14 +92,13 @@ class SQLDatabaseIngester:
             db = SQLDatabase(engine)
             all_docs = []
 
-            # Count total tables for progress
             total_tables = sum(
                 len(self.get_all_tables(inspector, schema)) for schema in schemas
             )
 
             with tqdm(
                 total=total_tables,
-                desc=f"  📊 {metadata['database']}",
+                desc=f"{metadata['database']}",
                 leave=False,
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} tables",
             ) as table_pbar:
@@ -136,13 +135,13 @@ class SQLDatabaseIngester:
         if not db_uris:
             return []
             
-        logger.info(f"🗄️ Starting SQL database ingestion for {len(db_uris)} databases")
+        logger.info(f"Starting SQL database ingestion for {len(db_uris)} databases")
 
         all_documents = []
 
         with tqdm(
             total=len(db_uris),
-            desc="🗄️ Databases",
+            desc="Databases",
             unit="db",
             bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}]",
         ) as pbar:
@@ -151,7 +150,7 @@ class SQLDatabaseIngester:
                 all_documents.extend(docs)
 
         logger.info(
-            f"✅ SQL ingestion complete - {self.stats['total_documents']} documents from "
+            f"SQL ingestion complete - {self.stats['total_documents']} documents from "
             f"{self.stats['total_databases']} databases, {self.stats['total_tables']} tables"
         )
 

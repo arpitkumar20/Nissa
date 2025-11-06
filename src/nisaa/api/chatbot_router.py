@@ -11,10 +11,10 @@ class ConnectionManager:
         self.active_connections: List[WebSocket] = []
 
     async def connect(self, websocket: WebSocket):
-        # Accept connection bypassing origin check
+
         await websocket.accept()
         self.active_connections.append(websocket)
-        print(f"✅ WebSocket connected: {websocket.client}")
+        print(f"WebSocket connected: {websocket.client}")
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
@@ -33,7 +33,7 @@ async def websocket_chatbot(websocket: WebSocket):
     try:
         while True:
             data = await websocket.receive_text()
-            # If data is a JSON string, parse it
+
             if isinstance(data, str):
                 try:
                     data_dict = json.loads(data)

@@ -1,9 +1,7 @@
-# File: chat_manager.py
 from langchain_core.messages import HumanMessage
 from .agent_context import PostgresChatHistory
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_core.messages.tool import ToolCall
-# Note: We are NOT importing the OpenAI client here.
 
 FEW_SHOT_EXAMPLES = [
     HumanMessage(content="Tell me about the cafeteria services."),
@@ -22,7 +20,6 @@ FEW_SHOT_EXAMPLES = [
         tool_call_id="tool_call_rag_2"
     ),
     
-    # --- Example 2: Slot Tool ---
     HumanMessage(content="Are there any appointments for Dr. XYZ who is a ABC specialist next week?"),
     AIMessage(
         content="",
@@ -39,7 +36,6 @@ FEW_SHOT_EXAMPLES = [
         tool_call_id="tool_call_slot_1"
     ),
 
-    # --- Example 3: Confirmation Tool ---
     HumanMessage(content="Hi, I need to cancel my appointment. The ID is B-12345."),
     AIMessage(
         content="",
@@ -74,40 +70,30 @@ class ChatManager:
         """
         This is the main function that orchestrates the entire flow.
         """
-        print(f"\n--- 1. Fetching history for thread: {mobile_number} ---")
         chat_history = self.few_shot_example+self.history.get_history(mobile_number)
-        
         print(f"--- 2. Found {len(chat_history)} messages in context. ---")
-        
-        # --- DO NOT build full_conversation here ---
-        
-        print(f"--- 3. Invoking Agent... ---")
+
         try:
             config = {"configurable": {"mobile_number": "temp-session"}}
             
-            # --- FIX 1: Pass history and input separately ---
             response_state = self.agent.invoke(
                 {
-                    "chat_history": chat_history, # Pass history list
+                    "chat_history": chat_history,
                     "input": user_prompt,
-                    "mobile_number":mobile_number          # Pass new user prompt string
+                    "mobile_number":mobile_number
                 }, 
                 config
-            )
-            
-            # --- FIX 2: Get response from the 'output' key ---
+            )            
             ai_content = response_state['output']
-            
-            print(f"--- 4. Received response from Agent. ---")
 
-            # 5. Save the new context (this part was already correct)
+            print(f"--- 4. Received response from Agent. ---")
             self.history.save_message(mobile_number, "user", user_prompt)
             self.history.save_message(mobile_number, "assistant", ai_content)
             
             print(f"--- 5. Saved new context to PostgreSQL. ---")
 
             return ai_content
-            
+
         except Exception as e:
             print(f"Error during agent invocation: {e}")
             return "Sorry, I encountered an error."
