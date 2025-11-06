@@ -430,10 +430,12 @@ async def wati_contact_chat_list(request: Request):
     data = await request.json()
  
     whatsapp_number = data.get("whatsapp_number")
-    chat_list = get_contact_messages(whatsapp_number)
+    page_size = data.get("page_size")
+    page_number = data.get("page_number")
 
-    return {
-        "messages": "All chats fetched successfully",
-        "contact_list": chat_list,
-    }
- 
+    if not all([whatsapp_number, page_size, page_number]):
+        raise ValueError("Missing required field")
+
+    chat_list = get_contact_messages(whatsapp_number, page_size, page_number)
+
+    return chat_list
