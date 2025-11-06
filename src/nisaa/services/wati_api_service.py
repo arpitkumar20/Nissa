@@ -222,81 +222,75 @@ def contect_list():
         print(f"Exception occurred while contact fetched: {e}")
         return {"error": str(e)}
 
-def get_contact_messages(whatsapp_number: str):
-    page_size = 100
-    page_number = 1
-    all_messages = []
+def get_contact_messages(whatsapp_number: str, page_size: str, page_number: str) -> dict:
+    page_size_no = int(page_size)
+    page_no = int(page_number)
+    total_pages = 0
+    total_entries = 0
 
-    url = f"{BASE_URL}/{TENANT_ID}/api/v1/getMessages/{whatsapp_number}?channelPhoneNumber={CHANNEL_NUMBER}&pageSize={page_size}&pageNumber={page_number}"
+    url = f"{BASE_URL}/{TENANT_ID}/api/v1/getMessages/{whatsapp_number}?channelPhoneNumber={CHANNEL_NUMBER}&pageSize={page_size_no}&pageNumber={page_no}"
     headers = {
         "accept": "*/*",
         "Authorization": f"Bearer {WATI_APY_KEY}",
     }
 
-    print("Fetching all messages started...")
+    print("Fetching messages started...")
 
     try:
-        # Get current date in IST
         IST = timezone(timedelta(hours=5, minutes=30))
         current_date = datetime.now(IST).date()
 
-        while url:
-            response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            print(f"Failed to fetch messages (HTTP {response.status_code}): {response.text}")
+            return {"messages": "Failed to fetch messages"}
 
-            if response.status_code != 200:
-                print(f"Failed to fetch messages (HTTP {response.status_code}): {response.text}")
-                break
+        data = response.json()
+        messages_data = data.get("messages", {})
+        total_entries = messages_data.get("total", 0)
+        items = messages_data.get("items", [])
 
-            data = response.json()
-            messages_data = data.get("messages", {})
+        total_pages = 1  # Only one page requested
 
-            items = messages_data.get("items", [])
-            if not items:
-                print("No message items found on this page.")
-                break
+        if not items:
+            print("No messages found on this page.")
+            return {"messages": "No messages found"}
 
-            page_messages = []
-            for msg in items:
-                created_time = msg.get("created")
-                if not created_time:
-                    continue
+        page_messages = []
+        for msg in items:
+            created_time = msg.get("created")
+            if not created_time:
+                continue
 
-                try:
-                    # Convert UTC to IST
-                    msg_datetime_utc = datetime.fromisoformat(created_time.replace("Z", "+00:00"))
-                    msg_datetime_ist = msg_datetime_utc.astimezone(IST)
-                except Exception:
-                    continue
+            try:
+                msg_datetime_utc = datetime.fromisoformat(created_time.replace("Z", "+00:00"))
+                msg_datetime_ist = msg_datetime_utc.astimezone(IST)
+            except Exception:
+                continue
 
-                # Filter only today's messages (IST date)
-                if msg_datetime_ist.date() == current_date:
-                    if msg.get("statusString") == 'SENT' or msg.get('type') == 'text':
-                        page_messages.append({
-                            "text": msg.get("text"),
-                            "id": msg.get('id'),
-                            "eventType": msg.get("eventType"),
-                            "statusString": msg.get("statusString"),
-                            # Format the time in readable IST format
-                            "created": msg_datetime_ist.strftime("%Y-%m-%d %I:%M:%S %p"),
-                            "conversationId": msg.get("conversationId"),
-                            "ticketId": msg.get('ticketId')
-                        })
+            if msg_datetime_ist.date() == current_date:
+                if msg.get("statusString") == 'SENT' or msg.get('type') == 'text':
+                    page_messages.append({
+                        "text": msg.get("text"),
+                        "id": msg.get('id'),
+                        "eventType": msg.get("eventType"),
+                        "statusString": msg.get("statusString"),
+                        "created": msg_datetime_ist.strftime("%Y-%m-%d %I:%M:%S %p"),
+                        "conversationId": msg.get("conversationId"),
+                        "ticketId": msg.get('ticketId'),
+                    })
 
-            all_messages.extend(page_messages)
-            print(f"✅ Fetched {len(page_messages)} messages from page {page_number} (today only)")
+        print(f"Fetched {total_entries} messages from page {page_no}")
 
-            link_info = data.get("link", {})
-            next_page_url = link_info.get("nextPage")
+        return {
+            "messages": f"Fetched {page_no} page successfully",
+            "contact_list": {
+                "total_pages": total_pages,
+                "total_entries": total_entries,
+                "messages": page_messages,
+            }
+        }
 
-            if next_page_url:
-                url = next_page_url
-                page_number += 1
-            else:
-                print("All chat pages fetched successfully.")
-                break
-
-        return all_messages
-
-    except requests.exceptions.RequestException as e:
-        print(f"Request exception occurred: {e}")
-        return {"error": str(e)}
+    except Exception as e:
+        print(f"Error occurred while fetching messages: {e}")
+        return {"messages": f"Error: {e}"}
