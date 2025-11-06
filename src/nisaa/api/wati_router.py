@@ -13,7 +13,7 @@ import base64
 from src.nisaa.services.wati_api_service import contect_list, send_whatsapp_message_v2, get_contact_messages
 from fastapi.templating import Jinja2Templates
 from src.nisaa.services.wati_api_service import send_whatsapp_message_v2
-from ..models.db_operations import initialize_and_save_booking,delete_booking
+from ..models.db_operations import get_booking_by_phone, initialize_and_save_booking,delete_booking
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -436,4 +436,41 @@ async def wati_contact_chat_list(request: Request):
         "messages": "All chats fetched successfully",
         "contact_list": chat_list,
     }
- 
+
+
+@router.post("/wati/lead/bulk/messages", summary="WATI router lead bulk messages sending")
+async def wati_contact_chat_list(request: Request):
+    data = await request.json()
+
+    company_name = data.get("company_name")
+    message = data.get("message")
+
+    print(f"Company Name: {company_name}, Message: {message}")
+    contact_list = contect_list()
+    tasks = []
+    phones_for_tasks = []
+
+    for contact in contact_list:
+        phone = contact.get("phone") or contact.get("wAid")
+        if not phone:
+            continue
+
+        booking_result = get_booking_by_phone(phone)
+
+        if not booking_result or len(booking_result) == 0 or not booking_result[0]:
+            tasks.append(asyncio.to_thread(send_whatsapp_message_v2, phone, message))
+            phones_for_tasks.append(phone)
+            continue
+
+    if tasks:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for phone, result in zip(phones_for_tasks, results):
+            if isinstance(result, Exception):
+                print(f"[{phone}] Failed to send: {result}")
+            else:
+                print(f"[{phone}] WhatsApp message sent successfully")
+
+    return {
+        "messages": "Bulk message sent successfully",
+        "total_sent": len(phones_for_tasks),
+    }
