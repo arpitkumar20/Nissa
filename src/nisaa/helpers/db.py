@@ -221,8 +221,28 @@ def initialize_db():
                 ON processed_zoho_reports(company_name, job_id);
             """)
             
+            # Leads table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS leads (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    wa_id VARCHAR(100),
+                    first_name TEXT,
+                    full_name TEXT,
+                    phone VARCHAR(20) NOT NULL UNIQUE,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_leads_phone ON leads(phone);
+                CREATE INDEX IF NOT EXISTS idx_leads_is_active ON leads(is_active);
+            """)
+
         conn.commit()
-        logger.info("✅ Database tables initialized")
+        logger.info("   Database tables initialized")
+
+        
+
     except Exception as e:
         if conn:
             conn.rollback()

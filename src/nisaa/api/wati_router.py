@@ -14,6 +14,11 @@ from src.nisaa.services.wati_api_service import contect_list, send_whatsapp_mess
 from fastapi.templating import Jinja2Templates
 from src.nisaa.services.wati_api_service import send_whatsapp_message_v2
 from ..models.db_operations import initialize_and_save_booking,delete_booking
+from src.nisaa.models.leads_management import (
+    insert_leads_from_contacts,      
+    get_active_leads_full          
+)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -439,3 +444,163 @@ async def wati_contact_chat_list(request: Request):
     chat_list = get_contact_messages(whatsapp_number, page_size, page_number)
 
     return chat_list
+
+
+@router.post("/leads/load", summary="Load WATI contacts into leads (insert only)")
+async def leads_load_from_wati():
+    """
+    Fetches contacts from WATI and inserts new ones into the leads table.
+    Skips duplicates based on phone number.
+    """
+    try:
+        # Fetch contacts from WATI
+        contacts = await asyncio.to_thread(contect_list)
+
+        if isinstance(contacts, dict) and "error" in contacts:
+            return {
+                "success": False,
+                "message": "Failed to fetch contacts from WATI",
+                "error": contacts["error"]
+            }
+
+        if not contacts:
+            return {
+                "success": True,
+                "message": "No contacts returned by WATI",
+                "total_contacts": 0,
+                "inserted": 0
+            }
+
+        # Insert into leads (skips duplicates)
+        inserted_count, error = await asyncio.to_thread(insert_leads_from_contacts, contacts)
+        if error:
+            return {
+                "success": False,
+                "message": "Error inserting contacts into leads",
+                "error": error
+            }
+
+        return {
+            "success": True,
+            "message": f"Inserted {inserted_count} new contacts into leads",
+            "total_contacts": len(contacts),
+            "inserted": inserted_count,
+            "skipped": len(contacts) - inserted_count
+        }
+
+    except Exception as e:
+        logger.error(f"Error in leads_load_from_wati: {e}", exc_info=True)
+        return {"success": False, "message": "Unexpected error occurred", "error": str(e)}
+
+@router.get("/leads/active", summary="Get active leads with complete information")
+async def leads_get_active():
+    """
+    Returns complete details of all active leads (is_active = TRUE).
+    Includes: id, wa_id, first_name, full_name, phone, is_active, created_at, updated_at
+    """
+    try:
+        leads, error = await asyncio.to_thread(get_active_leads_full)
+        if error:
+            return {"success": False, "message": "Error reading leads", "error": error}
+
+        return {
+            "success": True,
+            "message": f"Found {len(leads or [])} active leads",
+            "total_active_leads": len(leads or []),
+            "active_leads": leads or []
+        }
+
+    except Exception as e:
+        logger.error(f"Error in leads_get_active: {e}", exc_info=True)
+        return {"success": False, "message": "Unexpected error occurred", "error": str(e)}
+
+@router.post("/wati/lead/bulk/messages", summary="Send bulk messages to active leads")
+async def send_bulk_messages_to_active_leads(request: Request):
+    """
+    Sends a WhatsApp message to all active leads (is_active = TRUE).
+    Simply sends to all leads with is_active status = true, no other checks.
+    
+    """
+    try:
+        data = await request.json()
+        company_name = data.get("company_name")
+        message = data.get("message")
+
+        if not company_name:
+            raise HTTPException(status_code=400, detail="Missing required field: company_name")
+        
+        if not message:
+            raise HTTPException(status_code=400, detail="Missing required field: message")
+
+        logger.info(f"Starting bulk message send for company: {company_name}")
+        logger.info(f"Message: {message[:100]}...")
+
+        # Get all active leads from the leads table
+        leads, error = await asyncio.to_thread(get_active_leads_full)
+        
+        if error:
+            logger.error(f"Failed to fetch active leads: {error}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch leads: {error}")
+
+        if not leads:
+            return {
+                "success": True,
+                "message": "No active leads found",
+                "company_name": company_name,
+                "total_active_leads": 0,
+                "total_sent": 0,
+                "failed": 0
+            }
+
+        logger.info(f"Found {len(leads)} active leads")
+
+        # Prepare tasks for sending messages to ALL active leads
+        tasks = []
+        phones_for_tasks = []
+
+        for lead in leads:
+            phone = lead.get("phone")
+            if phone:
+                tasks.append(asyncio.to_thread(send_whatsapp_message_v2, phone, message))
+                phones_for_tasks.append(phone)
+            logger.info(f"Queued message for {phone}")
+
+        # Send messages concurrently
+        if tasks:
+            logger.info(f"Sending messages to {len(phones_for_tasks)} leads...")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            success_count = 0
+            failed_count = 0
+            
+            for phone, result in zip(phones_for_tasks, results):
+                if isinstance(result, Exception):
+                    logger.error(f"[{phone}] Failed to send: {result}")
+                    failed_count += 1
+                else:
+                    logger.info(f"[{phone}] ✅ WhatsApp message sent successfully")
+                    success_count += 1
+
+            return {
+                "success": True,
+                "message": "Bulk message sending completed",
+                "company_name": company_name,
+                "total_active_leads": len(leads),
+                "total_sent": success_count,
+                "failed": failed_count
+            }
+        else:
+            return {
+                "success": True,
+                "message": "No valid phone numbers found in active leads",
+                "company_name": company_name,
+                "total_active_leads": len(leads),
+                "total_sent": 0,
+                "failed": 0
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in bulk message sending: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
