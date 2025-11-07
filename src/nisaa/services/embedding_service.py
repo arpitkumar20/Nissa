@@ -6,8 +6,7 @@ import time
 from typing import List
 from openai import OpenAI, RateLimitError
 from langchain_openai import OpenAIEmbeddings
-from langchain_core.documents import Document
-from src.nisaa.helpers.logger import logger
+from src.nisaa.config.logger import logger
 
 class EmbeddingService:
     """Handles embedding generation for both regular documents and JSON chunks"""

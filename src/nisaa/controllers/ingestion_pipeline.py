@@ -6,15 +6,15 @@ from typing import List, Dict, Any, Optional
 from langchain_core.documents import Document
 from tqdm import tqdm
 
-from src.nisaa.controllers.file_deduplication import WebsiteDeduplicator,DBDeduplicator
-from src.nisaa.helpers.logger import logger
+from nisaa.services.file_deduplication import WebsiteDeduplicator,DBDeduplicator
+from src.nisaa.config.logger import logger
 from src.nisaa.services.embedding_service import EmbeddingService
-from src.nisaa.services.json_processor import JSONProcessor
-from src.nisaa.services.text_extract import TextPreprocessor
+from nisaa.utils.json_processor import JSONProcessor
+from nisaa.utils.text_extract import TextPreprocessor
 from src.nisaa.services.vector_store_service import VectorStoreService
-from src.nisaa.services.website_scrap import WebsiteIngester
-from src.nisaa.services.document_loader import DocumentLoader
-from src.nisaa.services.sql_database import SQLDatabaseIngester
+from nisaa.utils.website_scrap import WebsiteIngester
+from nisaa.utils.document_loader import DocumentLoader
+from nisaa.utils.sql_database import SQLDatabaseIngester
 
 class DataIngestionPipeline:
     """OPTIMIZED: Unified data ingestion pipeline with clean progress tracking"""
@@ -261,40 +261,44 @@ class DataIngestionPipeline:
         
         return all_website_docs
     
-    def load_and_deduplicate_databases(self, job_manager, company_name: str) -> List[Document]:
-        """Load databases with deduplication"""
-        if not self.sql_ingester or not self.db_uris:
+    def load_and_deduplicate_databases(
+        self, 
+        job_manager, 
+        company_name: str,
+        db_uri_list_with_tables: List[Dict]
+        ) -> List[Document]:
+        """
+        Load databases with table-level filtering
+
+        Args:
+            db_uri_list_with_tables: List of dicts like:
+                [{"db_uri": "...", "new_tables": ["users", "orders"]}]
+        """
+        if not self.sql_ingester or not db_uri_list_with_tables:
             return []
-        
-        print("\n Loading and deduplicating databases...")
-        
-        new_databases, skipped_databases = DBDeduplicator.filter_new_databases(
-            db_uris=self.db_uris,
-            job_manager=job_manager,
-            company_name=company_name
-        )
-        
-        self.db_info = {
-            "new": new_databases,
-            "skipped": skipped_databases
-        }
-        
+
+        print("\n Loading filtered database tables...")
+
         all_db_docs = []
-        if new_databases:
-            new_db_uris = [db['db_uri'] for db in new_databases]
-            
-            with tqdm(total=1, desc="🗄️ Databases", leave=False) as pbar:
+
+        with tqdm(total=len(db_uri_list_with_tables), desc="🗄️ Databases", leave=False) as pbar:
+            for db_config in db_uri_list_with_tables:
+                db_uri = db_config["db_uri"]
+                new_tables = db_config.get("new_tables", [])
+                
                 try:
-                    docs = self.sql_ingester.ingest_multiple_databases(new_db_uris)
+                    # Only ingest the specified new tables
+                    docs = self.sql_ingester.ingest_specific_tables(db_uri, new_tables)
                     all_db_docs.extend(docs)
-                    pbar.set_postfix_str(f"{len(docs)} docs")
+                    pbar.set_postfix_str(f"{len(docs)} docs from {len(new_tables)} tables")
                 except Exception as e:
-                    logger.error(f"Database loading failed: {e}")
+                    logger.error(f"Database loading failed for {db_uri}: {e}")
+                
                 pbar.update(1)
-        
+
         self.stats["database_documents"] = len(all_db_docs)
-        logger.info(f"{len(all_db_docs)} documents from {len(new_databases)} new databases")
-        
+        logger.info(f"{len(all_db_docs)} documents from filtered tables")
+
         return all_db_docs
 
     def process_json_files(self) -> tuple:
@@ -420,7 +424,7 @@ class DataIngestionPipeline:
         self.vector_store.verify_upsert(namespace, total_upserted)
 
     def run(self, job_manager=None, company_name=None) -> Dict[str, Any]:
-        """Execute pipeline with file AND website deduplication"""
+        """Execute pipeline with table-level database deduplication"""
         start_time = datetime.now()
 
         processed_documents = []
@@ -448,9 +452,10 @@ class DataIngestionPipeline:
         db_docs = []
         if job_manager and company_name and self.db_uris:
             print("\n" + "="*70)
-            print("PHASE 1B: DATABASE DEDUPLICATION")
+            print("PHASE 1B: DATABASE TABLE-LEVEL PROCESSING")
             print("="*70)
-            db_docs = self.load_and_deduplicate_databases(job_manager, company_name)
+            # db_uris now contains structured data with table filtering
+            db_docs = self.load_and_deduplicate_databases(job_manager, company_name, self.db_uris)
         
         processed_documents = self.load_and_process_standard_documents()
         
@@ -496,7 +501,6 @@ class DataIngestionPipeline:
                 self.vector_store.verify_upsert(namespace, upserted)
         else:
             print("\n No standard documents to process (all skipped or none provided)")
-
 
         print("\n" + "="*70)
         print("PHASE 2: PROCESSING JSON FILES (ZOHO DATA)")

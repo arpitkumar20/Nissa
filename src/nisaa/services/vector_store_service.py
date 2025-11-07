@@ -8,8 +8,8 @@ import hashlib
 from typing import List, Dict, Tuple, Any
 from pinecone import Pinecone as LangchainPinecone
 from langchain_openai import OpenAIEmbeddings
-from src.nisaa.helpers.logger import logger
-from src.nisaa.services.json_processor import extract_all_ids
+from src.nisaa.config.logger import logger
+from nisaa.utils.json_processor import extract_all_ids
 
 
 class VectorStoreService:

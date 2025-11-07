@@ -1,15 +1,3 @@
-"""
-Hybrid RAG Query Engine - FIXED VERSION
-
-Key Changes:
-1. Removed dependency on web_info.json file
-2. Namespace MUST be passed as parameter (no defaults)
-3. Better error handling for missing namespace
-4. Thread-safe per-request instantiation
-5. Cleaner initialization flow
-"""
-
-import json
 import os
 import re
 import logging
@@ -229,7 +217,6 @@ class HybridRAGQueryEngine:
             "id_value": None,
             "original_query": query,
         }
-
 
     def retrieve_by_id(
         self, id_type: str, id_value: str, top_k: int = 5
