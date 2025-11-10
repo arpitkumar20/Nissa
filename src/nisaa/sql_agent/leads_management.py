@@ -1,7 +1,7 @@
 import psycopg2
 import psycopg2.errors
 from typing import List, Dict, Tuple, Optional
-from ..config.db_connection import get_connection
+from ..config.db_connection import get_connection,get_pooled_connection
 
 
 

@@ -1,7 +1,7 @@
 import psycopg2
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
-from src.nisaa.config.db_connection import get_connection
+from ..config.db_connection import get_connection,get_pooled_connection
 
 
 class PostgresChatHistory:
@@ -17,8 +17,9 @@ class PostgresChatHistory:
         """Create chat_history table if it doesn't exist."""
         conn = None
         try:
-            conn = get_connection()
-            with conn.cursor() as cursor:
+
+            with get_connection() as conn:
+             with conn.cursor() as cursor:
                 cursor.execute(
                     """
                 CREATE TABLE IF NOT EXISTS chat_history (
@@ -42,9 +43,9 @@ class PostgresChatHistory:
                 conn.rollback()
             print(f"Error creating chat_history table: {e}")
             raise
-        finally:
-            if conn:
-                conn.close()
+        # finally:
+        #     if conn:
+        #         conn.close()
 
     def get_history(self, mobile_number: str, limit: int = 20) -> list[BaseMessage]:
         """
@@ -61,8 +62,8 @@ class PostgresChatHistory:
         conn = None
 
         try:
-            conn = get_connection()
-            with conn.cursor() as cursor:
+            with get_connection() as conn:
+             with conn.cursor() as cursor:
                 cursor.execute(
                     """
                 SELECT role, content FROM (
@@ -89,9 +90,9 @@ class PostgresChatHistory:
         except (Exception, psycopg2.DatabaseError) as e:
             print(f"Error fetching chat history: {e}")
 
-        finally:
-            if conn:
-                conn.close()
+        # finally:
+        #     if conn:
+        #         conn.close()
 
         return messages
 
@@ -107,7 +108,7 @@ class PostgresChatHistory:
         conn = None
 
         try:
-            conn = get_connection()
+          with get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -122,6 +123,6 @@ class PostgresChatHistory:
                 conn.rollback()
             print(f"Error saving message to chat history: {e}")
             raise
-        finally:
-            if conn:
-                conn.close()
+        # finally:
+        #     if conn:
+        #         conn.close()

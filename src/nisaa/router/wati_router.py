@@ -470,7 +470,6 @@ async def confirm_update_booking(request: Request):
         return templates.TemplateResponse("update_unsucessfull.html",context)
 
 
-
 @router.get("/wati/contact/list", summary="WATI router contact list")
 async def wati_contact_list():
     contact_list = contect_list()
@@ -478,19 +477,23 @@ async def wati_contact_list():
         "messages": "All contacts fetched successfully",
         "contact_list": contact_list,
     }
- 
- 
+
+
 @router.post("/wati/chat/list", summary="WATI router chat list")
 async def wati_contact_chat_list(request: Request):
     data = await request.json()
- 
-    whatsapp_number = data.get("whatsapp_number")
-    chat_list = get_contact_messages(whatsapp_number)
 
-    return {
-        "messages": "All chats fetched successfully",
-        "contact_list": chat_list,
-    }
+    whatsapp_number = data.get("whatsapp_number")
+    page_size = data.get("page_size")
+    page_number = data.get("page_number")
+
+    if not all([whatsapp_number, page_size, page_number]):
+        raise ValueError("Missing required field")
+
+    chat_list = get_contact_messages(whatsapp_number, page_size, page_number)
+
+    return chat_list
+
 
 @router.post("/leads/load", summary="Load WATI contacts into leads (insert only)")
 async def leads_load_from_wati():
@@ -517,6 +520,7 @@ async def leads_load_from_wati():
                 "inserted": 0
             }
 
+        # Insert into leads (skips duplicates)
         inserted_count, error = await asyncio.to_thread(insert_leads_from_contacts, contacts)
         if error:
             return {
@@ -564,7 +568,7 @@ async def send_bulk_messages_to_active_leads(request: Request):
     """
     Sends a WhatsApp message to all active leads (is_active = TRUE).
     Simply sends to all leads with is_active status = true, no other checks.
-    
+
     """
     try:
         data = await request.json()
@@ -573,15 +577,16 @@ async def send_bulk_messages_to_active_leads(request: Request):
 
         if not company_name:
             raise HTTPException(status_code=400, detail="Missing required field: company_name")
-        
+
         if not message:
             raise HTTPException(status_code=400, detail="Missing required field: message")
 
         logger.info(f"Starting bulk message send for company: {company_name}")
         logger.info(f"Message: {message[:100]}...")
 
+        # Get all active leads from the leads table
         leads, error = await asyncio.to_thread(get_active_leads_full)
-        
+
         if error:
             logger.error(f"Failed to fetch active leads: {error}")
             raise HTTPException(status_code=500, detail=f"Failed to fetch leads: {error}")
@@ -598,6 +603,7 @@ async def send_bulk_messages_to_active_leads(request: Request):
 
         logger.info(f"Found {len(leads)} active leads")
 
+        # Prepare tasks for sending messages to ALL active leads
         tasks = []
         phones_for_tasks = []
 
@@ -608,19 +614,20 @@ async def send_bulk_messages_to_active_leads(request: Request):
                 phones_for_tasks.append(phone)
             logger.info(f"Queued message for {phone}")
 
+        # Send messages concurrently
         if tasks:
             logger.info(f"Sending messages to {len(phones_for_tasks)} leads...")
             results = await asyncio.gather(*tasks, return_exceptions=True)
-            
+
             success_count = 0
             failed_count = 0
-            
+
             for phone, result in zip(phones_for_tasks, results):
                 if isinstance(result, Exception):
                     logger.error(f"[{phone}] Failed to send: {result}")
                     failed_count += 1
                 else:
-                    logger.info(f"[{phone}] WhatsApp message sent successfully")
+                    logger.info(f"[{phone}] ✅ WhatsApp message sent successfully")
                     success_count += 1
 
             return {

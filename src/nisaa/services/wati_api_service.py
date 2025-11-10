@@ -220,77 +220,96 @@ def contect_list():
         print(f"Exception occurred while contact fetched: {e}")
         return {"error": str(e)}
 
-def get_contact_messages(whatsapp_number: str):
-    page_size = 100
-    page_number = 1
-    all_messages = []
+def get_contact_messages(whatsapp_number: str, page_size: str, page_number: str) -> dict:
+    page_size_no = int(page_size)
+    page_no = int(page_number)
 
-    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/getMessages/{whatsapp_number}?channelPhoneNumber={WATI_CHANNEL_NUMBER}&pageSize={page_size}&pageNumber={page_number}"
+    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/getMessages/{whatsapp_number}?channelPhoneNumber={WATI_CHANNEL_NUMBER}&pageSize={page_size_no}&pageNumber={page_no}"
     headers = {
         "accept": "*/*",
         "Authorization": f"Bearer {WATI_API_KEY}",
     }
 
-    print("Fetching all messages started...")
+    print(f"Fetching messages for page {page_no} with page size {page_size_no}...")
 
     try:
         IST = timezone(timedelta(hours=5, minutes=30))
         current_date = datetime.now(IST).date()
 
-        while url:
-            response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers)
+        if response.status_code != 200:
+            print(f"Failed to fetch messages (HTTP {response.status_code}): {response.text}")
+            return {"messages": "Failed to fetch messages"}
 
-            if response.status_code != 200:
-                print(f"Failed to fetch messages (HTTP {response.status_code}): {response.text}")
-                break
+        data = response.json()
+        messages_data = data.get("messages", {})
+        total_entries = messages_data.get("total", 0)
+        items = messages_data.get("items", [])
 
-            data = response.json()
-            messages_data = data.get("messages", {})
+        total_pages = (total_entries + page_size_no - 1) // page_size_no if total_entries > 0 else 0
 
-            items = messages_data.get("items", [])
-            if not items:
-                print("No message items found on this page.")
-                break
+        if not items:
+            print("No messages found on this page.")
+            return {
+                "messages": f"Fetched {page_no} page successfully",
+                "contact_list": {
+                    "total_pages": total_pages,
+                    "total_entries": total_entries,
+                    "messages": []
+                }
+            }
 
-            page_messages = []
-            for msg in items:
-                created_time = msg.get("created")
-                if not created_time:
-                    continue
+        today_messages = []
+        older_messages = []
 
-                try:
-                    msg_datetime_utc = datetime.fromisoformat(created_time.replace("Z", "+00:00"))
-                    msg_datetime_ist = msg_datetime_utc.astimezone(IST)
-                except Exception:
-                    continue
+        for msg in items:
+            created_time = msg.get("created")
+            if not created_time:
+                continue
+
+            try:
+                msg_datetime_utc = datetime.fromisoformat(created_time.replace("Z", "+00:00"))
+                msg_datetime_ist = msg_datetime_utc.astimezone(IST)
+            except Exception as e:
+                print(f"Error parsing datetime: {e}")
+                continue
+
+            if msg.get("statusString") == 'SENT' or msg.get('type') == 'text':
+                message_obj = {
+                    "text": msg.get("text"),
+                    "id": msg.get('id'),
+                    "eventType": msg.get("eventType"),
+                    "statusString": msg.get("statusString"),
+                    "created": msg_datetime_ist.strftime("%Y-%m-%d %I:%M:%S %p"),
+                    "conversationId": msg.get("conversationId"),
+                    "ticketId": msg.get('ticketId'),
+                    "_sort_datetime": msg_datetime_ist
+                }
 
                 if msg_datetime_ist.date() == current_date:
-                    if msg.get("statusString") == 'SENT' or msg.get('type') == 'text':
-                        page_messages.append({
-                            "text": msg.get("text"),
-                            "id": msg.get('id'),
-                            "eventType": msg.get("eventType"),
-                            "statusString": msg.get("statusString"),
-                            "created": msg_datetime_ist.strftime("%Y-%m-%d %I:%M:%S %p"),
-                            "conversationId": msg.get("conversationId"),
-                            "ticketId": msg.get('ticketId')
-                        })
+                    today_messages.append(message_obj)
+                else:
+                    older_messages.append(message_obj)
 
-            all_messages.extend(page_messages)
-            print(f"Fetched {len(page_messages)} messages from page {page_number} (today only)")
+        today_messages.sort(key=lambda x: x["_sort_datetime"], reverse=True)
+        older_messages.sort(key=lambda x: x["_sort_datetime"], reverse=True)
 
-            link_info = data.get("link", {})
-            next_page_url = link_info.get("nextPage")
+        page_messages = today_messages + older_messages
 
-            if next_page_url:
-                url = next_page_url
-                page_number += 1
-            else:
-                print("All chat pages fetched successfully.")
-                break
+        for msg in page_messages:
+            del msg["_sort_datetime"]
 
-        return all_messages
+        print(f"Fetched {len(page_messages)} messages from page {page_no} (Total: {total_entries})")
 
-    except requests.exceptions.RequestException as e:
-        print(f"Request exception occurred: {e}")
-        return {"error": str(e)}
+        return {
+            "messages": f"Fetched {page_no} page successfully",
+            "contact_list": {
+                "total_pages": total_pages,
+                "total_entries": total_entries,
+                "messages": page_messages,
+            }
+        }
+
+    except Exception as e:
+        print(f"Error occurred while fetching messages: {e}")
+        return {"messages": f"Error: {e}"}
