@@ -6,11 +6,11 @@ import logging
 from urllib.parse import unquote
 from datetime import datetime, timezone, timedelta
 
-WATI_APY_KEY = os.getenv("WATI_APY_KEY")
-TENANT_ID = os.getenv("TENANT_ID")
+WATI_API_KEY = os.getenv("WATI_API_KEY")
+WATI_TENANT_ID = os.getenv("WATI_TENANT_ID")
 PHONE_NUMBER = os.getenv("PHONE_NUMBER")
-CHANNEL_NUMBER = os.getenv("CHANNEL_NUMBER")
-BASE_URL="https://live-mt-server.wati.io"
+WATI_CHANNEL_NUMBER = os.getenv("WATI_CHANNEL_NUMBER")
+WATI_BASE_URL="https://live-mt-server.wati.io"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,14 +26,14 @@ def send_whatsapp_message_v2(phone_number: str, message: str) -> dict:
         message = str(message)
     
     encoded_message = unquote(message)
-    url = f"{BASE_URL}/{TENANT_ID}/api/v1/sendSessionMessage/{phone_number}"
+    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/sendSessionMessage/{phone_number}"
     params = {
         "messageText": encoded_message,
-        "channelPhoneNumber": CHANNEL_NUMBER
+        "channelPhoneNumber": WATI_CHANNEL_NUMBER
     }
     headers = {
         'accept': '*/*',
-        'Authorization': f'Bearer {WATI_APY_KEY}'
+        'Authorization': f'Bearer {WATI_API_KEY}'
     }
 
     logger.info(f"Sending WhatsApp message to user via admin")
@@ -51,14 +51,14 @@ def send_whatsapp_message_v2(phone_number: str, message: str) -> dict:
 
 
 def send_whatsapp_image_v2(phone_number: str, image_path: str, caption: str) -> dict:
-    url = f"{BASE_URL}/{TENANT_ID}/api/v1/sendSessionFile/{phone_number}"
+    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/sendSessionFile/{phone_number}"
     params = {
         "caption": caption,
-        "channelPhoneNumber": CHANNEL_NUMBER
+        "channelPhoneNumber": WATI_CHANNEL_NUMBER
     }
     headers = {
         'accept': '*/*',
-        'Authorization': f'Bearer {WATI_APY_KEY}'
+        'Authorization': f'Bearer {WATI_API_KEY}'
     }
 
     mime_type, _ = mimetypes.guess_type(image_path)
@@ -94,13 +94,13 @@ def get_whatsapp_messages_v2(phone_number: str) -> dict:
     """
     Fetch WhatsApp messages from WATI API for a specific phone number.
     """
-    if not all([BASE_URL, WATI_APY_KEY, CHANNEL_NUMBER]):
-        logger.error("Missing environment variables: WATI_BASE_URL, WATI_API_KEY, or WATI_CHANNEL_NUMBER")
-        return {"error": "Missing environment variables: WATI_BASE_URL, WATI_API_KEY, or WATI_CHANNEL_NUMBER"}
+    if not all([WATI_BASE_URL, WATI_API_KEY, WATI_CHANNEL_NUMBER]):
+        logger.error("Missing environment variables: WATI_WATI_BASE_URL, WATI_API_KEY, or WATI_WATI_CHANNEL_NUMBER")
+        return {"error": "Missing environment variables: WATI_WATI_BASE_URL, WATI_API_KEY, or WATI_WATI_CHANNEL_NUMBER"}
 
-    url = f"{BASE_URL}/{TENANT_ID}/api/v1/getMessages/{phone_number}?channelPhoneNumber={CHANNEL_NUMBER}"
+    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/getMessages/{phone_number}?channelPhoneNumber={WATI_CHANNEL_NUMBER}"
     headers = {
-        "Authorization": f"Bearer {WATI_APY_KEY}",
+        "Authorization": f"Bearer {WATI_API_KEY}",
         "Accept": "application/json"
     }
 
@@ -151,22 +151,22 @@ def send_whatsapp_template_message(
         whatsapp_number (str): Recipient WhatsApp number (with country code).
         template_name (str): Name of the template in WATI.
         broadcast_name (str): Name of the broadcast message.
-        channel_number (str): WATI channel phone number.
+        WATI_CHANNEL_NUMBER (str): WATI channel phone number.
         api_key (str): WATI API Bearer token.
 
     Returns:
         dict: API response JSON or error details.
     """
-    url = f"{BASE_URL}/{TENANT_ID}/api/v1/sendTemplateMessage?whatsappNumber={whatsapp_number}"
+    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/sendTemplateMessage?whatsappNumber={whatsapp_number}"
 
     payload = json.dumps({
         "template_name": template_name,
         "broadcast_name": broadcast_name,
-        "channel_number": CHANNEL_NUMBER
+        "WATI_CHANNEL_NUMBER": WATI_CHANNEL_NUMBER
     })
 
     headers = {
-        'Authorization': f'Bearer {WATI_APY_KEY}',
+        'Authorization': f'Bearer {WATI_API_KEY}',
         'Content-Type': 'application/json-patch+json'
     }
 
@@ -185,10 +185,10 @@ def send_whatsapp_template_message(
 
 
 def contect_list():
-    url = f"{BASE_URL}/{TENANT_ID}/api/v1/getContacts"
+    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/getContacts"
     headers = {
     'accept': '*/*',
-    'Authorization': f'Bearer {WATI_APY_KEY}',
+    'Authorization': f'Bearer {WATI_API_KEY}',
     }
 
     print(f"Fetching all contacts processing is started")
@@ -225,10 +225,10 @@ def get_contact_messages(whatsapp_number: str):
     page_number = 1
     all_messages = []
 
-    url = f"{BASE_URL}/{TENANT_ID}/api/v1/getMessages/{whatsapp_number}?channelPhoneNumber={CHANNEL_NUMBER}&pageSize={page_size}&pageNumber={page_number}"
+    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/getMessages/{whatsapp_number}?channelPhoneNumber={WATI_CHANNEL_NUMBER}&pageSize={page_size}&pageNumber={page_number}"
     headers = {
         "accept": "*/*",
-        "Authorization": f"Bearer {WATI_APY_KEY}",
+        "Authorization": f"Bearer {WATI_API_KEY}",
     }
 
     print("Fetching all messages started...")

@@ -13,7 +13,12 @@ import base64
 from src.nisaa.sql_agent.chat_manager import ChatManager
 from src.nisaa.services.wati_api_service import contect_list, send_whatsapp_message_v2, get_contact_messages
 from fastapi.templating import Jinja2Templates
-from src.nisaa.sql_agent.booking_operations import initialize_and_save_booking,delete_booking
+from src.nisaa.sql_agent.booking_operations import initialize_and_save_booking,delete_booking,update_booking_details
+from src.nisaa.sql_agent.leads_management import (
+    insert_leads_from_contacts,      
+    get_active_leads_full          
+)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -262,70 +267,89 @@ async def wati_health():
     }
 
 @router.get("/wati/template", summary="When User click [BOOK], this api will be called")
-async def confirm_booking(request: Request):
+async def appoinment_booking(request: Request):
     params = request.query_params
     
+    # 1. Get the encoded string from the 'phone' parameter
     encoded_string = params.get("phone")
 
     if not encoded_string:
         return {"status": "error", "message": "Missing required data."}
 
     try:
+        # 2. Decode the URL-safe Base64 string back into bytes
+        # We add padding '=' just in case, and encode to utf-8
         padding_needed = 4 - (len(encoded_string) % 4)
         if padding_needed != 4:
             encoded_string += "=" * padding_needed
             
         decoded_bytes = base64.urlsafe_b64decode(encoded_string.encode('utf-8'))
         
+        # 3. Decode the bytes back into your original composite string
         composite_string = decoded_bytes.decode('utf-8')
+        # e.g., "918...-DrEmily---2025-11-03----10:00AM"
 
-        part1, time_slot = composite_string.split('----', 1)
+        # 4. Now you can safely split the decoded string
+        part0, doctor_specialty = composite_string.split('-----', 1)
+        part1, time_slot = part0.split('----', 1)
         part2, date = part1.split('---', 1)
         phone_number, doctor_name = part2.split('-', 1)
 
-        print(f"Successfully Decoded and Parsed:")
-        print(f"  Phone: {phone_number}")
-        print(f"  Doctor: {doctor_name}")
-        print(f"  Date: {date}")
-        print(f"  Slot: {time_slot}")
+        # 5. You have all your data!
+        logger.info(f"Successfully Decoded and Parsed:")
+        logger.info(f"  Phone: {phone_number}")
+        logger.info(f"  Doctor: {doctor_name}")
+        logger.info(f"Doctor Specialty: {doctor_specialty}")
+        logger.info(f"  Date: {date}")
+        logger.info(f"  Slot: {time_slot}")
         
-        booking_id,error=initialize_and_save_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot,status="success")
+        booking_id,error=initialize_and_save_booking(patient_phone=phone_number,doctor_name=doctor_name,doctor_specialty=doctor_specialty,booking_date=date,booking_time=time_slot,status="success")
         context = {"request": request}
-        if not error:
+        if booking_id:
            return templates.TemplateResponse("booking_success.html",context)
         else:
            return templates.TemplateResponse("booking_not_successful.html",context)
     except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
-        print(f"Error: Received a malformed or invalid booking link: {e}")
+        # This will catch bad Base64, splitting errors, or bad UTF-8
+        logger.error(f"Error: Received a malformed or invalid booking link: {e}")
         return templates.TemplateResponse("booking_not_successful.html",context)
 
 @router.get("/wati/booking/cancel",summary="When User click [CANCEL] , this api will be called" )
 async def cancel_booking(request: Request):
     params = request.query_params
     
+    # 1. Get the encoded string from the 'phone' parameter
     encoded_string = params.get("phone")
 
     if not encoded_string:
         return {"status": "error", "message": "Missing required data."}
 
     try:
+        # 2. Decode the URL-safe Base64 string back into bytes
+        # We add padding '=' just in case, and encode to utf-8
         padding_needed = 4 - (len(encoded_string) % 4)
         if padding_needed != 4:
             encoded_string += "=" * padding_needed
             
         decoded_bytes = base64.urlsafe_b64decode(encoded_string.encode('utf-8'))
         
+        # 3. Decode the bytes back into your original composite string
         composite_string = decoded_bytes.decode('utf-8')
+        # e.g., "918...-DrEmily---2025-11-03----10:00AM"
 
-        part1, time_slot = composite_string.split('----', 1)
+        # 4. Now you can safely split the decoded string
+        part0, doctor_specialty = composite_string.split('-----', 1)
+        part1, time_slot = part0.split('----', 1)
         part2, date = part1.split('---', 1)
         phone_number, doctor_name = part2.split('-', 1)
 
-        print(f"Successfully Decoded and Parsed:")
-        print(f"  Phone: {phone_number}")
-        print(f"  Doctor: {doctor_name}")
-        print(f"  Date: {date}")
-        print(f"  Slot: {time_slot}")
+        # 5. You have all your data!
+        logger.info(f"Successfully Decoded and Parsed:")
+        logger.info(f"  Phone: {phone_number}")
+        logger.info(f"  Doctor: {doctor_name}")
+        logger.info(f"Doctor Specialty: {doctor_specialty}")
+        logger.info(f"  Date: {date}")
+        logger.info(f"  Slot: {time_slot}")
         
         row_number,error=delete_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot)
         context = {"request": request}
@@ -335,8 +359,115 @@ async def cancel_booking(request: Request):
             return templates.TemplateResponse("cancel_unsucessfull.html",context)
 
     except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
-        print(f"Error: Received a malformed or invalid booking link: {e}")
+        # This will catch bad Base64, splitting errors, or bad UTF-8
+        logger.error(f"Error: Received a malformed or invalid booking link: {e}")
         return templates.TemplateResponse("cancel_unsucessfull_isuue.html",context)
+
+@router.get("/wati/booking/update",summary="When User click [UPDATE] , this api will be called" )
+async def update_booking(request: Request,background_tasks: BackgroundTasks):
+    params = request.query_params
+    
+    # 1. Get the encoded string from the 'phone' parameter
+    encoded_string = params.get("phone")
+
+    if not encoded_string:
+        return {"status": "error", "message": "Missing required data."}
+
+    try:
+        # 2. Decode the URL-safe Base64 string back into bytes
+        # We add padding '=' just in case, and encode to utf-8
+        padding_needed = 4 - (len(encoded_string) % 4)
+        if padding_needed != 4:
+            encoded_string += "=" * padding_needed
+            
+        decoded_bytes = base64.urlsafe_b64decode(encoded_string.encode('utf-8'))
+        
+        # 3. Decode the bytes back into your original composite string
+        composite_string = decoded_bytes.decode('utf-8')
+        # e.g., "918...-DrEmily---2025-11-03----10:00AM"
+
+        # 4. Now you can safely split the decoded string
+        part00,booking_id=composite_string.split('------', 1)
+        part0, doctor_specialty = part00.split('-----', 1)
+        part1, time_slot = part0.split('----', 1)
+        part2, date = part1.split('---', 1)
+        phone_number, doctor_name = part2.split('-', 1)
+
+        # 5. You have all your data!
+        logger.info(f"Successfully Decoded and Parsed:")
+        logger.info(f"  Phone: {phone_number}")
+        logger.info(f"  Doctor: {doctor_name}")
+        logger.info(f"Doctor Specialty: {doctor_specialty}")
+        logger.info(f"  Date: {date}")
+        logger.info(f"  Slot: {time_slot}")
+        
+        text=f"I want to update my booking with booking_id: {booking_id}, doctor {doctor_name}, specialty:{doctor_specialty}, at date :{date}, time slot:{time_slot}"
+        request_id = str(int(time.time() * 1000))  # Unique request ID
+        
+        try:
+            bot = request.app.state.bot
+        
+        except AttributeError:
+            logger.error("'bot' not found in app.state. Check lifespan startup.")
+            raise HTTPException(status_code=500, detail="Bot is not initialized.")    
+
+        background_tasks.add_task(process_and_send_response, phone_number, text, request_id, bot)   
+
+
+    except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
+        # This will catch bad Base64, splitting errors, or bad UTF-8
+        logger.error(f"Error: Received a malformed or invalid booking link: {e}")
+
+
+@router.get("/wati/booking/confirm_update",summary="When User click [UPDATE] , this api will be called" )
+async def confirm_update_booking(request: Request):
+    params = request.query_params
+    
+    # 1. Get the encoded string from the 'phone' parameter
+    encoded_string = params.get("phone")
+
+    if not encoded_string:
+        return {"status": "error", "message": "Missing required data."}
+
+    try:
+        # 2. Decode the URL-safe Base64 string back into bytes
+        # We add padding '=' just in case, and encode to utf-8
+        padding_needed = 4 - (len(encoded_string) % 4)
+        if padding_needed != 4:
+            encoded_string += "=" * padding_needed
+            
+        decoded_bytes = base64.urlsafe_b64decode(encoded_string.encode('utf-8'))
+        
+        # 3. Decode the bytes back into your original composite string
+        composite_string = decoded_bytes.decode('utf-8')
+        # e.g., "918...-DrEmily---2025-11-03----10:00AM"
+
+        # 4. Now you can safely split the decoded string
+        part00,booking_id=composite_string.split('------', 1)
+        part0, doctor_specialty = part00.split('-----', 1)
+        part1, time_slot = part0.split('----', 1)
+        part2, date = part1.split('---', 1)
+        phone_number, doctor_name = part2.split('-', 1)
+
+        # 5. You have all your data!
+        logger.info(f"Successfully Decoded and Parsed:")
+        logger.info(f"  Phone: {phone_number}")
+        logger.info(f"  Doctor: {doctor_name}")
+        logger.info(f"Doctor Specialty: {doctor_specialty}")
+        logger.info(f"  Date: {date}")
+        logger.info(f"  Slot: {time_slot}")
+        logger.info(f"booking_id: {booking_id}")
+        
+        booking_id,err=update_booking_details(booking_id=booking_id,doctor_name=doctor_name,doctor_specialty=doctor_specialty,date=date,time_slot=time_slot)
+        context={"request": request}
+        if not err:
+            return templates.TemplateResponse("update_successfull.html",context)
+        else :
+            return templates.TemplateResponse("update_unsucessfull.html",context)   
+    except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
+        # This will catch bad Base64, splitting errors, or bad UTF-8
+        logger.error(f"Error: Received a malformed or invalid booking link: {e}")
+        return templates.TemplateResponse("update_unsucessfull.html",context)
 
 
 
@@ -360,4 +491,158 @@ async def wati_contact_chat_list(request: Request):
         "messages": "All chats fetched successfully",
         "contact_list": chat_list,
     }
- 
+
+@router.post("/leads/load", summary="Load WATI contacts into leads (insert only)")
+async def leads_load_from_wati():
+    """
+    Fetches contacts from WATI and inserts new ones into the leads table.
+    Skips duplicates based on phone number.
+    """
+    try:
+        # Fetch contacts from WATI
+        contacts = await asyncio.to_thread(contect_list)
+
+        if isinstance(contacts, dict) and "error" in contacts:
+            return {
+                "success": False,
+                "message": "Failed to fetch contacts from WATI",
+                "error": contacts["error"]
+            }
+
+        if not contacts:
+            return {
+                "success": True,
+                "message": "No contacts returned by WATI",
+                "total_contacts": 0,
+                "inserted": 0
+            }
+
+        inserted_count, error = await asyncio.to_thread(insert_leads_from_contacts, contacts)
+        if error:
+            return {
+                "success": False,
+                "message": "Error inserting contacts into leads",
+                "error": error
+            }
+
+        return {
+            "success": True,
+            "message": f"Inserted {inserted_count} new contacts into leads",
+            "total_contacts": len(contacts),
+            "inserted": inserted_count,
+            "skipped": len(contacts) - inserted_count
+        }
+
+    except Exception as e:
+        logger.error(f"Error in leads_load_from_wati: {e}", exc_info=True)
+        return {"success": False, "message": "Unexpected error occurred", "error": str(e)}
+
+@router.get("/leads/active", summary="Get active leads with complete information")
+async def leads_get_active():
+    """
+    Returns complete details of all active leads (is_active = TRUE).
+    Includes: id, wa_id, first_name, full_name, phone, is_active, created_at, updated_at
+    """
+    try:
+        leads, error = await asyncio.to_thread(get_active_leads_full)
+        if error:
+            return {"success": False, "message": "Error reading leads", "error": error}
+
+        return {
+            "success": True,
+            "message": f"Found {len(leads or [])} active leads",
+            "total_active_leads": len(leads or []),
+            "active_leads": leads or []
+        }
+
+    except Exception as e:
+        logger.error(f"Error in leads_get_active: {e}", exc_info=True)
+        return {"success": False, "message": "Unexpected error occurred", "error": str(e)}
+
+@router.post("/wati/lead/bulk/messages", summary="Send bulk messages to active leads")
+async def send_bulk_messages_to_active_leads(request: Request):
+    """
+    Sends a WhatsApp message to all active leads (is_active = TRUE).
+    Simply sends to all leads with is_active status = true, no other checks.
+    
+    """
+    try:
+        data = await request.json()
+        company_name = data.get("company_name")
+        message = data.get("message")
+
+        if not company_name:
+            raise HTTPException(status_code=400, detail="Missing required field: company_name")
+        
+        if not message:
+            raise HTTPException(status_code=400, detail="Missing required field: message")
+
+        logger.info(f"Starting bulk message send for company: {company_name}")
+        logger.info(f"Message: {message[:100]}...")
+
+        leads, error = await asyncio.to_thread(get_active_leads_full)
+        
+        if error:
+            logger.error(f"Failed to fetch active leads: {error}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch leads: {error}")
+
+        if not leads:
+            return {
+                "success": True,
+                "message": "No active leads found",
+                "company_name": company_name,
+                "total_active_leads": 0,
+                "total_sent": 0,
+                "failed": 0
+            }
+
+        logger.info(f"Found {len(leads)} active leads")
+
+        tasks = []
+        phones_for_tasks = []
+
+        for lead in leads:
+            phone = lead.get("phone")
+            if phone:
+                tasks.append(asyncio.to_thread(send_whatsapp_message_v2, phone, message))
+                phones_for_tasks.append(phone)
+            logger.info(f"Queued message for {phone}")
+
+        if tasks:
+            logger.info(f"Sending messages to {len(phones_for_tasks)} leads...")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            success_count = 0
+            failed_count = 0
+            
+            for phone, result in zip(phones_for_tasks, results):
+                if isinstance(result, Exception):
+                    logger.error(f"[{phone}] Failed to send: {result}")
+                    failed_count += 1
+                else:
+                    logger.info(f"[{phone}] WhatsApp message sent successfully")
+                    success_count += 1
+
+            return {
+                "success": True,
+                "message": "Bulk message sending completed",
+                "company_name": company_name,
+                "total_active_leads": len(leads),
+                "total_sent": success_count,
+                "failed": failed_count
+            }
+        else:
+            return {
+                "success": True,
+                "message": "No valid phone numbers found in active leads",
+                "company_name": company_name,
+                "total_active_leads": len(leads),
+                "total_sent": 0,
+                "failed": 0
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in bulk message sending: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")

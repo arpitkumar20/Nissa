@@ -87,7 +87,7 @@ class ZohoCreatorExporter:
             self.zoho_region = "IN"
 
         self.accounts_url = self.ZOHO_CONFIG[self.zoho_region]["accounts"]
-        self.api_base_url = self.ZOHO_CONFIG[self.zoho_region]["creator"]
+        self.api_WATI_BASE_URL = self.ZOHO_CONFIG[self.zoho_region]["creator"]
 
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -235,7 +235,7 @@ class ZohoCreatorExporter:
     
     def get_owner_name(self):
         try:
-            url = f"{self.api_base_url}/creator/v2.1/meta/applications"
+            url = f"{self.api_WATI_BASE_URL}/creator/v2.1/meta/applications"
             response = self.rate_limited_request("GET", url, timeout=30)
 
             if response.status_code != 200:
@@ -258,7 +258,7 @@ class ZohoCreatorExporter:
         API Call: 1 per account
         """
         self.account_owner = self.get_owner_name()
-        url = f"{self.api_base_url}/creator/v2.1/meta/{self.account_owner}/applications"
+        url = f"{self.api_WATI_BASE_URL}/creator/v2.1/meta/{self.account_owner}/applications"
 
         try:
             response = self.rate_limited_request("GET", url, timeout=30)
@@ -275,7 +275,7 @@ class ZohoCreatorExporter:
         Get all reports from a Zoho Creator application
         API Call: 1 per application
         """
-        url = f"{self.api_base_url}/creator/v2.1/meta/{self.account_owner}/{app_link_name}/reports"
+        url = f"{self.api_WATI_BASE_URL}/creator/v2.1/meta/{self.account_owner}/{app_link_name}/reports"
 
         try:
             response = self.rate_limited_request("GET", url, timeout=30)
@@ -298,7 +298,7 @@ class ZohoCreatorExporter:
 
         Returns: job_id or None
         """
-        url = f"{self.api_base_url}/creator/v2.1/bulk/{self.account_owner}/{app_link_name}/report/{report_link_name}/read"
+        url = f"{self.api_WATI_BASE_URL}/creator/v2.1/bulk/{self.account_owner}/{app_link_name}/report/{report_link_name}/read"
 
         payload = {"query": {"max_records": 200000}}
 
@@ -365,7 +365,7 @@ class ZohoCreatorExporter:
 
         Returns: status info dict
         """
-        url = f"{self.api_base_url}/creator/v2.1/bulk/{self.account_owner}/{app_link_name}/report/{report_link_name}/read/{job_id}"
+        url = f"{self.api_WATI_BASE_URL}/creator/v2.1/bulk/{self.account_owner}/{app_link_name}/report/{report_link_name}/read/{job_id}"
 
         try:
             response = self.rate_limited_request("GET", url, timeout=30)
@@ -395,7 +395,7 @@ class ZohoCreatorExporter:
         Returns: ZIP file bytes or None
         """
         # Construct the correct download URL
-        full_url = f"{self.api_base_url}/creator/v2.1/bulk/{self.account_owner}/{app_link_name}/report/{report_link_name}/read/{job_id}/result"
+        full_url = f"{self.api_WATI_BASE_URL}/creator/v2.1/bulk/{self.account_owner}/{app_link_name}/report/{report_link_name}/read/{job_id}/result"
 
         try:
             response = self.rate_limited_request("GET", full_url, timeout=90)
