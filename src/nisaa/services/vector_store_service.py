@@ -8,8 +8,8 @@ import hashlib
 from typing import List, Dict, Tuple, Any
 from pinecone import Pinecone as LangchainPinecone
 from langchain_openai import OpenAIEmbeddings
-from src.nisaa.helpers.logger import logger
-from src.nisaa.services.json_processor import extract_all_ids
+from src.nisaa.config.logger import logger
+from nisaa.utils.json_processor import extract_all_ids
 
 
 class VectorStoreService:
@@ -46,9 +46,8 @@ class VectorStoreService:
         processed_metadatas = []
         for i, metadata in enumerate(metadatas):
             meta_copy = metadata.copy()
-            meta_copy['text'] = texts[i][:40000]  # Pinecone metadata limit
+            meta_copy['text'] = texts[i][:40000]
             
-            # Convert all values to Pinecone-compatible types
             final_metadata = {}
             for key, value in meta_copy.items():
                 if isinstance(value, (str, int, float, bool)):
@@ -60,7 +59,7 @@ class VectorStoreService:
             
             processed_metadatas.append(final_metadata)
         
-        logger.info(f"📦 Prepared {len(ids)} document vectors for namespace '{namespace}'")
+        logger.info(f"Prepared {len(ids)} document vectors for namespace '{namespace}'")
         return ids, embeddings, processed_metadatas
     
     def prepare_json_vectors(
@@ -98,7 +97,6 @@ class VectorStoreService:
                 "source_type": "json"
             }
             
-            # Add ID metadata
             if 'record_id' in all_ids:
                 metadata["record_id"] = all_ids['record_id']
             if 'unique_id' in all_ids:
@@ -110,12 +108,10 @@ class VectorStoreService:
             if 'phone' in all_ids:
                 metadata["phone"] = all_ids['phone']
             
-            # Check for nested lists
             has_nested_lists = any(key.count('[') > 1 for key in entity_data.keys())
             if has_nested_lists:
                 metadata["has_nested_arrays"] = True
             
-            # Extract identifiers from chunk
             lines = chunk.split('\n')
             for line in lines:
                 if 'Key identifiers:' in line:
@@ -128,7 +124,7 @@ class VectorStoreService:
                 "metadata": metadata
             })
         
-        logger.info(f"📦 Prepared {len(vectors)} JSON vectors for namespace '{namespace}'")
+        logger.info(f"Prepared {len(vectors)} JSON vectors for namespace '{namespace}'")
         return vectors
     
     def upsert_vectors(
@@ -156,7 +152,7 @@ class VectorStoreService:
         total_upserted = 0
         upsert_batches = (len(vectors) - 1) // batch_size + 1
         
-        logger.info(f"📤 Upserting {len(vectors)} vectors to namespace '{namespace}'...")
+        logger.info(f"Upserting {len(vectors)} vectors to namespace '{namespace}'...")
         
         for i in range(0, len(vectors), batch_size):
             batch_ids = ids[i:i + batch_size]
@@ -175,14 +171,14 @@ class VectorStoreService:
                 upserted_count = upsert_response.get('upserted_count', 0)
                 total_upserted += upserted_count
                 
-                logger.info(f"   ✓ Batch {batch_num}/{upsert_batches}: {upserted_count} vectors")
-                time.sleep(0.3)  # Rate limiting
+                logger.info(f"Batch {batch_num}/{upsert_batches}: {upserted_count} vectors")
+                time.sleep(0.3)
                 
             except Exception as e:
-                logger.error(f"   ✗ Batch {batch_num} failed: {e}")
+                logger.error(f"Batch {batch_num} failed: {e}")
                 raise
         
-        logger.info(f"✅ Total upserted: {total_upserted}/{len(vectors)}")
+        logger.info(f"Total upserted: {total_upserted}/{len(vectors)}")
         return total_upserted
     
     def upsert_json_vectors(
@@ -205,7 +201,7 @@ class VectorStoreService:
         total_upserted = 0
         upsert_batches = (len(vectors) - 1) // batch_size + 1
         
-        logger.info(f"📤 Upserting {len(vectors)} JSON vectors to namespace '{namespace}'...")
+        logger.info(f"Upserting {len(vectors)} JSON vectors to namespace '{namespace}'...")
         
         for i in range(0, len(vectors), batch_size):
             batch = vectors[i:i+batch_size]
@@ -214,12 +210,12 @@ class VectorStoreService:
             try:
                 self.index.upsert(vectors=batch, namespace=namespace)
                 total_upserted += len(batch)
-                logger.info(f"   ✓ Batch {batch_num}/{upsert_batches}: {len(batch)} vectors")
+                logger.info(f"Batch {batch_num}/{upsert_batches}: {len(batch)} vectors")
             except Exception as e:
-                logger.error(f"   ✗ Batch {batch_num} failed: {e}")
+                logger.error(f"Batch {batch_num} failed: {e}")
                 raise
         
-        logger.info(f"✅ Total JSON vectors upserted: {total_upserted}")
+        logger.info(f"Total JSON vectors upserted: {total_upserted}")
         return total_upserted
     
     def verify_upsert(self, namespace: str, expected_count: int):
@@ -229,12 +225,12 @@ class VectorStoreService:
             stats = self.index.describe_index_stats()
             namespace_count = stats.get('namespaces', {}).get(namespace, {}).get('vector_count', 0)
             
-            logger.info(f"📊 Verification - Vectors in '{namespace}': {namespace_count}")
+            logger.info(f"Verification - Vectors in '{namespace}': {namespace_count}")
             
             if namespace_count < expected_count:
-                logger.warning(f"⚠️ Expected {expected_count}, found {namespace_count}")
+                logger.warning(f"Expected {expected_count}, found {namespace_count}")
             else:
-                logger.info(f"✅ All {expected_count} vectors stored correctly")
+                logger.info(f"All {expected_count} vectors stored correctly")
         except Exception as e:
             logger.warning(f"Could not verify: {e}")
     
