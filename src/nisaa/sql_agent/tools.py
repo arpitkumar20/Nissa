@@ -15,7 +15,7 @@ from psycopg2 import extras
 from datetime import datetime, date, timedelta, time
 from .agent_context import PostgresChatHistory
 from .booking_operations import get_booking_by_phone
-from src.nisaa.config.db_connection import get_connection
+from src.nisaa.config.db_connection import get_pooled_connection
 
 from pydantic import BaseModel, Field, EmailStr
 import uuid
@@ -85,7 +85,7 @@ def get_next_two_available_days_and_slot(doctor_name: str,specialty: str):
     """
 
     try:
-        with get_connection() as conn:
+        with get_pooled_connection() as conn:
             with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
 
                 search_pattern = build_search_pattern(doctor_name)

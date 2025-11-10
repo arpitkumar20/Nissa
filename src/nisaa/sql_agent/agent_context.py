@@ -1,7 +1,7 @@
 import psycopg2
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
-from ..config.db_connection import get_connection,get_pooled_connection
+from ..config.db_connection import get_pooled_connection
 
 
 class PostgresChatHistory:
@@ -18,7 +18,7 @@ class PostgresChatHistory:
         conn = None
         try:
 
-            with get_connection() as conn:
+            with get_pooled_connection() as conn:
              with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -62,7 +62,7 @@ class PostgresChatHistory:
         conn = None
 
         try:
-            with get_connection() as conn:
+            with get_pooled_connection() as conn:
              with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -108,7 +108,7 @@ class PostgresChatHistory:
         conn = None
 
         try:
-          with get_connection() as conn:
+          with get_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
