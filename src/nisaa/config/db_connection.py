@@ -5,7 +5,7 @@ from contextlib import contextmanager
 
 import psycopg2
 from psycopg2 import pool, extras
-from psycopg2.pool import ThreadedConnectionPool
+# from psycopg2.pool import ThreadedConnectionPool
 from dotenv import load_dotenv
 
 load_dotenv()

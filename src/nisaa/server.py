@@ -59,7 +59,6 @@ async def lifespan(app: FastAPI):
     """
     # Initialize ChatManager
     try:
-        initialize_db_pool()
         history_db = PostgresChatHistory()
         stateless_agent = create_stateless_agent()
         bot = ChatManager(agent=stateless_agent, history_manager=history_db)
