@@ -38,7 +38,6 @@ def format_response_for_whatsapp(response: str) -> str:
     """
     Optimized version using pre-compiled regex and str.translate.
     """
-    start = time.perf_counter()
     # Pass 1: Remove _, ~, ` in one highly efficient pass
     cleaned = response.translate(TRANSLATION_TABLE)
 
@@ -50,8 +49,6 @@ def format_response_for_whatsapp(response: str) -> str:
 
     # Pass 4: Fix newlines (uses pre-compiled pattern)
     cleaned = NEWLINE_PATTERN.sub("\n\n", cleaned)
-    end = time.perf_counter()
-    print(f"IIIIIIIIIIIIIIIIIIIII took {end - start:.4f} seconds to run.")
     # Pass 5: Strip
     return cleaned.strip()
 
