@@ -5,6 +5,7 @@ from contextlib import contextmanager
 
 import psycopg2
 from psycopg2 import pool, extras
+from psycopg2.pool import ThreadedConnectionPool
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -142,3 +143,43 @@ def close_pool():
         _pg_pool.closeall()
         _pg_pool = None
         logger.info("PostgreSQL connection pool closed")
+
+
+connection_pool=None
+
+def initialize_db_pool() -> pool.SimpleConnectionPool:
+    """
+    Get or create the PostgreSQL connection pool.
+
+    Returns:
+        SimpleConnectionPool: The connection pool instance
+    """
+    global connection_pool
+    if connection_pool is None:
+        try:
+            connection_pool=ThreadedConnectionPool(
+                minconn=5,
+                maxconn=20,
+                dsn=DB_URI
+               )
+            logger.info("Postgres Connection Pool created.")
+        except psycopg2.Error as e:
+            logger.info(f"error creating connection pool {e}")
+            raise
+@contextmanager
+def global_pooled_connection():
+    if connection_pool is None:
+        raise RuntimeError("Connection pool is not initialized.")
+    conn=None
+    try:
+        conn=connection_pool.getconn()   
+        yield conn
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        print(f"Database transaction error: {e}")
+        raise
+    finally:
+        if conn:
+            connection_pool.putconn(conn)        

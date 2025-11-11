@@ -267,7 +267,7 @@ async def wati_health():
     }
 
 @router.get("/wati/template", summary="When User click [BOOK], this api will be called")
-async def appoinment_booking(request: Request):
+async def appoinment_booking(request: Request,background_tasks: BackgroundTasks):
     params = request.query_params
     
     # 1. Get the encoded string from the 'phone' parameter
@@ -305,6 +305,17 @@ async def appoinment_booking(request: Request):
         
         booking_id,error=initialize_and_save_booking(patient_phone=phone_number,doctor_name=doctor_name,doctor_specialty=doctor_specialty,booking_date=date,booking_time=time_slot,status="success")
         context = {"request": request}
+        request_id = str(int(time.time() * 1000))  # Unique request ID    
+        try:
+            bot = request.app.state.bot
+        
+        except AttributeError:
+            logger.error("'bot' not found in app.state. Check lifespan startup.")
+            raise HTTPException(status_code=500, detail="Bot is not initialized.")    
+        
+        text="Can you show my booking details?" 
+        background_tasks.add_task(process_and_send_response, phone_number, text, request_id, bot)
+
         if booking_id:
            return templates.TemplateResponse("booking_success.html",context)
         else:
@@ -315,7 +326,7 @@ async def appoinment_booking(request: Request):
         return templates.TemplateResponse("booking_not_successful.html",context)
 
 @router.get("/wati/booking/cancel",summary="When User click [CANCEL] , this api will be called" )
-async def cancel_booking(request: Request):
+async def cancel_booking(request: Request,background_tasks: BackgroundTasks):
     params = request.query_params
     
     # 1. Get the encoded string from the 'phone' parameter
@@ -353,6 +364,15 @@ async def cancel_booking(request: Request):
         
         row_number,error=delete_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot)
         context = {"request": request}
+        try:
+            bot = request.app.state.bot
+        
+        except AttributeError:
+            logger.error("'bot' not found in app.state. Check lifespan startup.")
+            raise HTTPException(status_code=500, detail="Bot is not initialized.")    
+        
+        text="Can you show my booking details?" 
+        background_tasks.add_task(process_and_send_response, phone_number, text, request_id, bot)
         if row_number:
             return templates.TemplateResponse("cancel_successful.html",context)
         else:
@@ -410,9 +430,10 @@ async def update_booking(request: Request,background_tasks: BackgroundTasks):
         except AttributeError:
             logger.error("'bot' not found in app.state. Check lifespan startup.")
             raise HTTPException(status_code=500, detail="Bot is not initialized.")    
-
-        background_tasks.add_task(process_and_send_response, phone_number, text, request_id, bot)   
-
+        
+        background_tasks.add_task(process_and_send_response, phone_number, text, request_id, bot) 
+        context={"request":request}  
+        return templates.TemplateResponse("update_in_progress.html",context)
 
     except (base64.binascii.Error, ValueError, UnicodeDecodeError) as e:
         # This will catch bad Base64, splitting errors, or bad UTF-8
@@ -420,7 +441,7 @@ async def update_booking(request: Request,background_tasks: BackgroundTasks):
 
 
 @router.get("/wati/booking/confirm_update",summary="When User click [UPDATE] , this api will be called" )
-async def confirm_update_booking(request: Request):
+async def confirm_update_booking(request: Request,background_tasks: BackgroundTasks):
     params = request.query_params
     
     # 1. Get the encoded string from the 'phone' parameter
@@ -460,6 +481,17 @@ async def confirm_update_booking(request: Request):
         
         booking_id,err=update_booking_details(booking_id=booking_id,doctor_name=doctor_name,doctor_specialty=doctor_specialty,date=date,time_slot=time_slot)
         context={"request": request}
+        request_id = str(int(time.time() * 1000))  # Unique request ID
+        
+        try:
+            bot = request.app.state.bot
+        
+        except AttributeError:
+            logger.error("'bot' not found in app.state. Check lifespan startup.")
+            raise HTTPException(status_code=500, detail="Bot is not initialized.")    
+        
+        background_tasks.add_task(process_and_send_response, phone_number, text, request_id, bot) 
+        
         if not err:
             return templates.TemplateResponse("update_successfull.html",context)
         else :

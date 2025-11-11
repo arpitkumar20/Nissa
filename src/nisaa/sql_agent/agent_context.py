@@ -1,8 +1,10 @@
 import psycopg2
+import logging
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
-from ..config.db_connection import get_connection,get_pooled_connection
+from ..config.db_connection import get_connection,global_pooled_connection
 
+logger=logging.getLogger(__name__)
 
 class PostgresChatHistory:
     """
@@ -17,8 +19,7 @@ class PostgresChatHistory:
         """Create chat_history table if it doesn't exist."""
         conn = None
         try:
-
-            with get_connection() as conn:
+            with global_pooled_connection() as conn:
              with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -37,15 +38,8 @@ class PostgresChatHistory:
                 ON chat_history(timestamp);
                 """
                 )
-                conn.commit()
-        except (Exception, psycopg2.DatabaseError) as e:
-            if conn:
-                conn.rollback()
-            print(f"Error creating chat_history table: {e}")
-            raise
-        # finally:
-        #     if conn:
-        #         conn.close()
+        except Exception as e:
+           logger.error(f"Error occured while creating chat history Table {e}.")        
 
     def get_history(self, mobile_number: str, limit: int = 20) -> list[BaseMessage]:
         """
@@ -62,7 +56,7 @@ class PostgresChatHistory:
         conn = None
 
         try:
-            with get_connection() as conn:
+            with global_pooled_connection() as conn:
              with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -90,10 +84,6 @@ class PostgresChatHistory:
         except (Exception, psycopg2.DatabaseError) as e:
             print(f"Error fetching chat history: {e}")
 
-        # finally:
-        #     if conn:
-        #         conn.close()
-
         return messages
 
     def save_message(self, mobile_number: str, role: str, content: str):
@@ -108,7 +98,7 @@ class PostgresChatHistory:
         conn = None
 
         try:
-          with get_connection() as conn:
+          with global_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -117,12 +107,6 @@ class PostgresChatHistory:
                 """,
                     (mobile_number, role, content),
                 )
-                conn.commit()
         except (Exception, psycopg2.DatabaseError) as e:
-            if conn:
-                conn.rollback()
             print(f"Error saving message to chat history: {e}")
             raise
-        # finally:
-        #     if conn:
-        #         conn.close()
