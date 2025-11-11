@@ -29,30 +29,30 @@ from fastapi.templating import Jinja2Templates
 
 logger = logging.getLogger(__name__)
 
+BOLD_PATTERN = re.compile(r"\*{2,}(\S(.*?\S)?)\*{2,}")
+CODE_BLOCK_PATTERN = re.compile(r"```[\w]*\n?")
+NEWLINE_PATTERN = re.compile(r"\n{3,}")
+TRANSLATION_TABLE = str.maketrans("", "", "_~`")
 
 def format_response_for_whatsapp(response: str) -> str:
     """
-    Formats LLM responses for WhatsApp display:
-    - Keeps single *...* as-is
-    - Converts **...**, ***...***, etc. to *...*
-    - Removes markdown artifacts like _, ~, `, and code blocks
+    Optimized version using pre-compiled regex and str.translate.
     """
-    cleaned = response
+    start = time.perf_counter()
+    # Pass 1: Remove _, ~, ` in one highly efficient pass
+    cleaned = response.translate(TRANSLATION_TABLE)
 
-    # Convert multiple * (2 or more) wrapping text into single *...*
-    cleaned = re.sub(r"\*{2,}(\S(.*?\S)?)\*{2,}", r"*\1*", cleaned)
+    # Pass 2: Fix bolding (uses pre-compiled pattern)
+    cleaned = BOLD_PATTERN.sub(r"*\1*", cleaned)
+    
+    # Pass 3: Remove code blocks (uses pre-compiled pattern)
+    cleaned = CODE_BLOCK_PATTERN.sub("", cleaned)
 
-    # Remove underscores (italic in markdown)
-    cleaned = cleaned.replace("_", "")
-    # Remove tildes (strikethrough)
-    cleaned = cleaned.replace("~", "")
-    # Remove backticks (inline code)
-    cleaned = cleaned.replace("`", "")
-    # Remove code block markers
-    cleaned = re.sub(r"```[\w]*\n?", "", cleaned)
-    # Remove excessive newlines
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-
+    # Pass 4: Fix newlines (uses pre-compiled pattern)
+    cleaned = NEWLINE_PATTERN.sub("\n\n", cleaned)
+    end = time.perf_counter()
+    print(f"IIIIIIIIIIIIIIIIIIIII took {end - start:.4f} seconds to run.")
+    # Pass 5: Strip
     return cleaned.strip()
 
 
@@ -150,12 +150,12 @@ async def process_and_send_response(phone: str, text: str, request_id: str, bot:
         )
 
         logger.info(f"[{request_id}] Bot generated reply: {ai_reply[:100]}...")
-        # ai_reply_cleaned = format_response_for_whatsapp(ai_reply)
+        ai_reply_cleaned = format_response_for_whatsapp(ai_reply)
         processing_time = time.time() - start_time
         logger.info(f"[{request_id}] Pipeline completed in {processing_time:.2f}s")
 
         try:
-            await asyncio.to_thread(send_whatsapp_message_v2, phone, ai_reply)
+            await asyncio.to_thread(send_whatsapp_message_v2, phone, ai_reply_cleaned)
             logger.info(f"[{request_id}] WhatsApp message sent successfully")
         except Exception as e:
             logger.error(f"[{request_id}] Failed to send WhatsApp message: {e}")
