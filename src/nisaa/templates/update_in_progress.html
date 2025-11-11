@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Update in Progress</title>
+    <!-- 1. Include Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* 2. Set Inter as the default font */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Custom font import (optional, but good practice) */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+    </style>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <!-- Card container -->
+    <div class="bg-white w-full max-w-md p-6 sm:p-8 rounded-xl shadow-lg transition-all">
+        <div class="text-center">
+            
+            <!-- 1. In-Progress Icon (Spinning SVG) -->
+            <div class="flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mx-auto mb-4">
+                <svg class="animate-spin w-10 h-10 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+            </div>
+
+            <!-- 2. Main Message -->
+            <h1 class="text-2xl font-bold text-gray-900 mb-2">
+                Update in Progress
+            </h1>
+            <p class="text-gray-600 mb-6">
+                Your request is being processed. Please return to our whatsapp chat.
+            </p>
+
+            <!-- No details or buttons are needed for a loading page -->
+
+        </div>
+    </div>
+
+    <!-- No script is needed for this static loading page -->
+    <script>
+    </script>
+
+</body>
+</html>
