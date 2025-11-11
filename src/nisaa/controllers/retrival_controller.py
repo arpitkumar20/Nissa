@@ -100,6 +100,98 @@ class HybridRAGQueryEngine:
             openai_api_key=OPENAI_API_KEY,
         )
 
+    # Add these methods to your HybridRAGQueryEngine class
+
+    def retrieve_with_embedding(
+        self,
+        query_embedding: List[float],
+        query_text: str,
+        top_k: int = 5
+    ) -> List[Document]:
+        """
+        Retrieve documents using a PRE-GENERATED embedding
+        This avoids regenerating embeddings that were already created
+        
+        Args:
+            query_embedding: Pre-computed embedding vector
+            query_text: Original query text (for logging only)
+            top_k: Number of results to return
+            
+        Returns:
+            List of Document objects
+        """
+        try:
+            logger.info(f"Retrieving with pre-generated embedding for: {query_text[:50]}")
+            
+            # Query Pinecone directly with the embedding
+            results = self.index.query(
+                vector=query_embedding,
+                top_k=top_k,
+                namespace=self.namespace,
+                include_metadata=True
+            )
+            
+            # Convert to LangChain Document objects
+            documents = []
+            for match in results.matches:
+                doc = Document(
+                    page_content=match.metadata.get("text", ""),
+                    metadata=match.metadata
+                )
+                documents.append(doc)
+            
+            logger.info(f"Found {len(documents)} semantic matches")
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error in retrieve_with_embedding: {e}")
+            return []
+
+
+    def retrieve_by_id(
+        self,
+        id_value: str,
+        id_type: str,
+        top_k: int = 5
+    ) -> List[Document]:
+        """
+        Retrieve documents by exact ID match (no embedding needed)
+        
+        Args:
+            id_value: The ID value to search for
+            id_type: Type of ID (record_id, phone, etc.)
+            top_k: Maximum results
+            
+        Returns:
+            List of Document objects
+        """
+        try:
+            logger.info(f"Exact match search for {id_type}: {id_value}")
+            
+            # Query Pinecone with metadata filter (no vector needed)
+            results = self.index.query(
+                vector=[0.0] * 1536,  # Dummy vector
+                top_k=top_k,
+                namespace=self.namespace,
+                filter={id_type: id_value},  # Exact metadata match
+                include_metadata=True
+            )
+            
+            documents = []
+            for match in results.matches:
+                doc = Document(
+                    page_content=match.metadata.get("text", ""),
+                    metadata=match.metadata
+                )
+                documents.append(doc)
+            
+            logger.info(f"Found {len(documents)} exact matches")
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error in retrieve_by_id: {e}")
+            return []
+
     def detect_id_in_query(self, query: str) -> Dict[str, Any]:
         """
         Detect if query contains an ID or phone number
