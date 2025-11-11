@@ -11,7 +11,7 @@ from fastapi import FastAPI, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from src.nisaa.config.db_connection import get_pool
+from src.nisaa.config.db_connection import get_pool,initialize_db_pool
 from src.nisaa.config.db import initialize_db
 from src.nisaa.router.ingestion_router import router as ingestion_router
 from src.nisaa.router.wati_router import router as wati_router
