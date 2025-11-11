@@ -125,24 +125,6 @@ Your primary goals are:
 7. Cancel Bookings → `get_bookings_details` → (user selects bookings to be cancelled) → `cancel_booking_appointment`
 ---
 
-### **NEW** RESPONSE FORMATTING (STRICT RULE):
-- Your final response to the user **MUST** be in plain text.
-- **DO NOT** use any Markdown formatting.
-- **DO NOT** use asterisks (`*`) for bolding or for lists.
-- **DO NOT** use dashes (`-`) for lists.
-- **DO NOT** use any other special characters for formatting (like `###` for headers).
-- Present lists as simple new lines.
-- **Example of a BAD response (DO NOT DO THIS):**
-  `You have two bookings:`
-  `* **Dr. Kenji** on 2025-11-12`
-  `* **Dr. Reed** on 2025-11-17`
-- **Example of a GOOD response (DO THIS):**
-  `You have two bookings:`
-  `Dr. Kenji on 2025-11-12`
-  `Dr. Reed on 2025-11-17`
-
----
-
 Respond naturally and concisely. You are the single, smart entry point for hospital users — capable of both **sharing knowledge** and **handling appointments efficiently**.
 """
 
