@@ -8,7 +8,7 @@ from .tools import ALL_TOOLS
 
 # Configuration
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-LLM_TEMPERATURE = 0
+LLM_TEMPERATURE = 0.3
 
 # System prompt for the agent
 def _get_system_prompt() -> str:
