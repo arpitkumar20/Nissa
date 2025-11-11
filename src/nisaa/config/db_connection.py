@@ -12,14 +12,12 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Database Configuration
 DATABASE_HOST = os.getenv("DATABASE_HOST")
 DATABASE_PORT = os.getenv("DATABASE_PORT")
 DATABASE_USER = os.getenv("DATABASE_USER")
 DATABASE_PASS = os.getenv("DATABASE_PASS")
 DB_NAME = os.getenv("DB_NAME")
 
-# Connection String (for psycopg2.connect)
 CONN_STRING = (
     f"dbname='{DB_NAME}' "
     f"user='{DATABASE_USER}' "
@@ -28,42 +26,48 @@ CONN_STRING = (
     f"port='{DATABASE_PORT}'"
 )
 
-# Database URI (for pool or other uses)
 DB_URI = f"postgresql://{DATABASE_USER}:{DATABASE_PASS}@{DATABASE_HOST}:{DATABASE_PORT}/{DB_NAME}"
 
 if not all([DATABASE_HOST, DATABASE_PORT, DATABASE_USER, DATABASE_PASS, DB_NAME]):
-    raise ValueError("One or more database environment variables are not set!")
+    raise ValueError("One or more database environment variables are not set")
 
-# Global connection pool
-_pg_pool: Optional[pool.SimpleConnectionPool] = None
+# Optimized connection pool with better settings
+_pg_pool: Optional[pool.ThreadedConnectionPool] = None
 
 
-def get_pool() -> pool.SimpleConnectionPool:
+def get_pool() -> pool.ThreadedConnectionPool:
     """
-    Get or create the PostgreSQL connection pool.
-
-    Returns:
-        SimpleConnectionPool: The connection pool instance
+    Get or create optimized PostgreSQL connection pool
     """
     global _pg_pool
     if _pg_pool is None:
-        _pg_pool = pool.SimpleConnectionPool(minconn=1, maxconn=20, dsn=DB_URI)
-        logger.info("✓ PostgreSQL connection pool created")
+        _pg_pool = pool.ThreadedConnectionPool(
+            minconn=2,  # Increased from 1
+            maxconn=30,  # Increased from 20
+            dsn=DB_URI,
+            # Connection optimization
+            options="-c statement_timeout=30000",  # 30s timeout
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=5,
+        )
+        logger.info("PostgreSQL connection pool created")
     return _pg_pool
 
 
 def get_connection():
     """
-    Get a direct PostgreSQL connection (non-pooled).
-    Useful for simple operations that don't need pooling.
-
-    Returns:
-        psycopg2.connection: A database connection
-
-    Note: Caller is responsible for closing the connection.
+    Get a direct PostgreSQL connection with optimizations
     """
     try:
-        return psycopg2.connect(dsn=CONN_STRING)
+        conn = psycopg2.connect(
+            dsn=CONN_STRING,
+            options="-c statement_timeout=30000",
+            keepalives=1,
+            keepalives_idle=30,
+        )
+        return conn
     except Exception as e:
         logger.error(f"Failed to establish database connection: {e}")
         raise ConnectionError(f"Unable to connect to database: {e}")
@@ -72,22 +76,15 @@ def get_connection():
 @contextmanager
 def get_pooled_connection():
     """
-    Context manager for getting a connection from the pool.
-    Automatically returns connection to pool after use.
-
-    Usage:
-        with get_pooled_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT * FROM table")
-
-    Yields:
-        psycopg2.connection: A pooled database connection
+    Context manager for pooled connections with auto-commit
     """
     pool_instance = get_pool()
     conn = None
     try:
         conn = pool_instance.getconn()
+        conn.autocommit = False
         yield conn
+        conn.commit()
     except Exception as e:
         if conn:
             conn.rollback()
@@ -101,33 +98,24 @@ def get_pooled_connection():
 @contextmanager
 def get_dict_cursor(use_pool: bool = True):
     """
-    Context manager for getting a RealDictCursor.
-    Returns results as dictionaries instead of tuples.
-
-    Args:
-        use_pool: If True, uses pooled connection. If False, creates new connection.
-
-    Usage:
-        with get_dict_cursor() as cur:
-            cur.execute("SELECT * FROM table")
-            results = cur.fetchall()
-            # results is a list of dicts
-
-    Yields:
-        psycopg2.extras.RealDictCursor: A dictionary cursor
+    Context manager for RealDictCursor with auto-commit
     """
     if use_pool:
         with get_pooled_connection() as conn:
             with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
                 yield cur
-                conn.commit()
     else:
         conn = None
         try:
             conn = get_connection()
+            conn.autocommit = False
             with conn.cursor(cursor_factory=extras.RealDictCursor) as cur:
                 yield cur
                 conn.commit()
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            raise
         finally:
             if conn:
                 conn.close()
@@ -135,8 +123,7 @@ def get_dict_cursor(use_pool: bool = True):
 
 def close_pool():
     """
-    Close all connections in the pool.
-    Should be called during application shutdown.
+    Close all connections in the pool
     """
     global _pg_pool
     if _pg_pool:
@@ -144,42 +131,3 @@ def close_pool():
         _pg_pool = None
         logger.info("PostgreSQL connection pool closed")
 
-
-connection_pool=None
-
-def initialize_db_pool() -> pool.SimpleConnectionPool:
-    """
-    Get or create the PostgreSQL connection pool.
-
-    Returns:
-        SimpleConnectionPool: The connection pool instance
-    """
-    global connection_pool
-    if connection_pool is None:
-        try:
-            connection_pool=ThreadedConnectionPool(
-                minconn=5,
-                maxconn=20,
-                dsn=DB_URI
-               )
-            logger.info("Postgres Connection Pool created.")
-        except psycopg2.Error as e:
-            logger.info(f"error creating connection pool {e}")
-            raise
-@contextmanager
-def global_pooled_connection():
-    if connection_pool is None:
-        raise RuntimeError("Connection pool is not initialized.")
-    conn=None
-    try:
-        conn=connection_pool.getconn()   
-        yield conn
-        conn.commit()
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        print(f"Database transaction error: {e}")
-        raise
-    finally:
-        if conn:
-            connection_pool.putconn(conn)        

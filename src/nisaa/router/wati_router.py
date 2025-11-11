@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -27,6 +28,33 @@ from pathlib import Path
 from fastapi.templating import Jinja2Templates
 
 logger = logging.getLogger(__name__)
+
+
+def format_response_for_whatsapp(response: str) -> str:
+    """
+    Formats LLM responses for WhatsApp display:
+    - Keeps single *...* as-is
+    - Converts **...**, ***...***, etc. to *...*
+    - Removes markdown artifacts like _, ~, `, and code blocks
+    """
+    cleaned = response
+
+    # Convert multiple * (2 or more) wrapping text into single *...*
+    cleaned = re.sub(r"\*{2,}(\S(.*?\S)?)\*{2,}", r"*\1*", cleaned)
+
+    # Remove underscores (italic in markdown)
+    cleaned = cleaned.replace("_", "")
+    # Remove tildes (strikethrough)
+    cleaned = cleaned.replace("~", "")
+    # Remove backticks (inline code)
+    cleaned = cleaned.replace("`", "")
+    # Remove code block markers
+    cleaned = re.sub(r"```[\w]*\n?", "", cleaned)
+    # Remove excessive newlines
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    return cleaned.strip()
+
 
 try:
     current_file = Path(__file__).resolve()
@@ -108,7 +136,7 @@ async def process_and_send_response(phone: str, text: str, request_id: str, bot:
         phone: User's phone number
         text: User's message
         request_id: Unique request identifier for tracking
-        company_namespace: Company-specific namespace
+        bot: ChatManager instance
     """
     start_time = time.time()
 
@@ -122,6 +150,7 @@ async def process_and_send_response(phone: str, text: str, request_id: str, bot:
         )
 
         logger.info(f"[{request_id}] Bot generated reply: {ai_reply[:100]}...")
+        # ai_reply_cleaned = format_response_for_whatsapp(ai_reply)
         processing_time = time.time() - start_time
         logger.info(f"[{request_id}] Pipeline completed in {processing_time:.2f}s")
 
@@ -364,6 +393,7 @@ async def cancel_booking(request: Request,background_tasks: BackgroundTasks):
         
         row_number,error=delete_booking(patient_phone=phone_number,doctor_name=doctor_name,booking_date=date,booking_time=time_slot)
         context = {"request": request}
+        request_id = str(int(time.time() * 1000))  # Unique request ID    
         try:
             bot = request.app.state.bot
         
@@ -489,7 +519,7 @@ async def confirm_update_booking(request: Request,background_tasks: BackgroundTa
         except AttributeError:
             logger.error("'bot' not found in app.state. Check lifespan startup.")
             raise HTTPException(status_code=500, detail="Bot is not initialized.")    
-        
+        text="Can you show my booking details if Any?"
         background_tasks.add_task(process_and_send_response, phone_number, text, request_id, bot) 
         
         if not err:

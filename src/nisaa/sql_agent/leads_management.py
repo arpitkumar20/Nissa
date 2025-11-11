@@ -28,7 +28,7 @@ def insert_leads_from_contacts(contacts: List[Dict]) -> Tuple[int, Optional[str]
     inserted_count = 0
     
     try:
-        with get_connection() as conn:
+        with get_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 for contact in contacts:
                     phone = contact.get("phone")
@@ -68,7 +68,7 @@ def get_active_leads_full() -> Tuple[Optional[List[dict]], Optional[str]]:
     """
 
     try:
-        with get_connection() as conn:
+        with get_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(select_sql)
                 rows = cursor.fetchall()

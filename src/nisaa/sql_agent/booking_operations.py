@@ -3,7 +3,7 @@ import os
 import psycopg2.errors
 import logging
 
-from ..config.db_connection import global_pooled_connection
+from ..config.db_connection import get_pooled_connection
 
 logger=logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ def initialize_and_save_booking(
     new_booking_id = None
 
     try:
-        with global_pooled_connection() as conn:
+        with get_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 # Step A: Ensure the table exists
                 cursor.execute(create_table_sql)
@@ -108,7 +108,7 @@ def get_booking_by_phone(patient_phone: str):
     bookings = []
     
     try:
-        with global_pooled_connection() as conn:
+        with get_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 
                 cursor.execute(sql, (patient_phone,))
@@ -159,7 +159,7 @@ def delete_booking(
     rows_deleted = 0
     
     try:
-        with global_pooled_connection() as conn:
+        with get_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 
                 cursor.execute(sql, (
@@ -238,7 +238,7 @@ def update_booking_details(booking_id: int, **updates):
     query_values.append(booking_id)
     
     try:
-        with global_pooled_connection() as conn:
+        with get_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(update_sql, tuple(query_values))
                 updated_row = cursor.fetchone()

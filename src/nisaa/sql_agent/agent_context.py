@@ -2,7 +2,7 @@ import psycopg2
 import logging
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
-from ..config.db_connection import get_connection,global_pooled_connection
+from ..config.db_connection import get_pooled_connection
 
 logger=logging.getLogger(__name__)
 
@@ -19,7 +19,8 @@ class PostgresChatHistory:
         """Create chat_history table if it doesn't exist."""
         conn = None
         try:
-            with global_pooled_connection() as conn:
+
+            with get_pooled_connection() as conn:
              with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -56,7 +57,7 @@ class PostgresChatHistory:
         conn = None
 
         try:
-            with global_pooled_connection() as conn:
+            with get_pooled_connection() as conn:
              with conn.cursor() as cursor:
                 cursor.execute(
                     """
@@ -98,7 +99,7 @@ class PostgresChatHistory:
         conn = None
 
         try:
-          with global_pooled_connection() as conn:
+          with get_pooled_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
                     """
