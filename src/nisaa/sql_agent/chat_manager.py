@@ -313,8 +313,6 @@ class ChatManager:
         self.history = history_manager
 
 
-        logger.info("ChatManager initialized with agent and history manager")
-
     def _build_chat_context(self, mobile_number: str) -> List[BaseMessage]:
         """
         Builds the complete chat context by combining few-shot examples

@@ -26,14 +26,117 @@ PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX", "nisaa-knowledge")
 
 # Optimized defaults
 TOP_K = int(os.getenv("TOP_K", "10"))
-SIMILARITY_THRESHOLD = float(
-    os.getenv("SIMILARITY_THRESHOLD", "0.55")
-)
+SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.55"))
+
+try:
+    from rapidfuzz import fuzz, process
+    FUZZY_AVAILABLE = True
+except ImportError:
+    FUZZY_AVAILABLE = False
+    logging.warning("rapidfuzz not available - fuzzy matching disabled")
+
+
+class PineconeFuzzyCache:
+    """
+    Cache for Pinecone metadata to enable fast fuzzy matching
+    Loads once per namespace and reuses for the session
+    """
+    
+    def __init__(self):
+        self._cache = {}
+        self._initialized = {}
+    
+    def get_or_load(self, namespace: str, index, max_samples: int = 500) -> Dict[str, List[str]]:
+        """
+        Get cached metadata or load from Pinecone
+        
+        Returns:
+            Dict with keys: 'doctors', 'specialties', 'departments', 'full_names', 'phones'
+        """
+        if namespace in self._cache:
+            return self._cache[namespace]
+        
+        metadata_cache = {
+            'doctors': [],
+            'specialties': [],
+            'departments': [],
+            'full_names': [],
+            'phones': [],
+            'record_ids': [],
+            'unique_ids': []
+        }
+        
+        try:
+            # Sample vectors to extract metadata
+            stats = index.describe_index_stats()
+            namespace_stats = stats.get('namespaces', {}).get(namespace, {})
+            vector_count = namespace_stats.get('vector_count', 0)
+            
+            if vector_count == 0:
+                logger.warning(f"No vectors found in namespace: {namespace}")
+                return metadata_cache
+            
+            # Query with dummy vector to get samples
+            sample_size = min(max_samples, vector_count)
+            results = index.query(
+                vector=[0.0] * 1536,
+                top_k=sample_size,
+                namespace=namespace,
+                include_metadata=True
+            )
+            
+            # Extract unique values from metadata
+            for match in results.get('matches', []):
+                metadata = match.get('metadata', {})
+                
+                # Extract doctor names
+                for key in ['doctor_name', 'name']:
+                    if key in metadata and metadata[key]:
+                        metadata_cache['doctors'].append(str(metadata[key]).strip())
+                
+                # Extract specialties
+                if 'specialty' in metadata and metadata['specialty']:
+                    metadata_cache['specialties'].append(str(metadata['specialty']).strip())
+                
+                # Extract departments
+                if 'department' in metadata and metadata['department']:
+                    metadata_cache['departments'].append(str(metadata['department']).strip())
+                
+                # Extract full names
+                if 'full_name' in metadata and metadata['full_name']:
+                    metadata_cache['full_names'].append(str(metadata['full_name']).strip())
+                
+                # Extract phones
+                if 'phone' in metadata and metadata['phone']:
+                    metadata_cache['phones'].append(str(metadata['phone']).strip())
+                
+                # Extract IDs
+                if 'record_id' in metadata and metadata['record_id']:
+                    metadata_cache['record_ids'].append(str(metadata['record_id']).strip())
+                
+                if 'unique_id' in metadata and metadata['unique_id']:
+                    metadata_cache['unique_ids'].append(str(metadata['unique_id']).strip())
+            
+            # Remove duplicates and sort
+            for key in metadata_cache:
+                metadata_cache[key] = sorted(list(set(metadata_cache[key])))
+            
+            self._cache[namespace] = metadata_cache
+            self._initialized[namespace] = True
+            
+        except Exception as e:
+            logger.error(f"Failed to load metadata cache: {e}")
+        
+        return metadata_cache
+
+
+# Global cache instance
+_pinecone_cache = PineconeFuzzyCache()
 
 
 class HybridRAGQueryEngine:
     """
-    Optimized RAG Engine with improved retrieval accuracy and speed
+    ENHANCED: Optimized RAG Engine with Pinecone fuzzy matching
     """
 
     def __init__(
@@ -60,26 +163,32 @@ class HybridRAGQueryEngine:
             model=embedding_model,
             openai_api_key=OPENAI_API_KEY,
             show_progress_bar=False,
-            chunk_size=1000,  # Batch embeddings
+            chunk_size=1000,
         )
 
         # Initialize Pinecone
         self.pc = PineconeClient(api_key=PINECONE_API_KEY)
         self.index = self.pc.Index(pinecone_index_name)
 
-        # Initialize vectorstore with optimized settings
+        # Initialize vectorstore
         self.vectorstore = PineconeVectorStore(
             index_name=pinecone_index_name,
             embedding=self.embeddings,
             namespace=namespace,
         )
 
-        # Initialize LLM with lower temperature for accuracy
+        # Initialize LLM
         self.llm = ChatOpenAI(
             model=llm_model,
             temperature=temperature,
             max_tokens=max_tokens,
             openai_api_key=OPENAI_API_KEY,
+        )
+
+        # Load metadata cache for fuzzy matching
+        self.metadata_cache = _pinecone_cache.get_or_load(
+            namespace=namespace,
+            index=self.index
         )
 
         # Compile regex patterns once
@@ -96,98 +205,282 @@ class HybridRAGQueryEngine:
             "unique_id_hyphen": re.compile(r"\b[A-Z]{2,}-\d+-\d+\b", re.IGNORECASE),
             "unique_id_plain": re.compile(r"\b[A-Z]{2,}\d{5,}\b", re.IGNORECASE),
         }
-        self.keywords = {
-            "phone": ["phone", "mobile", "contact", "number"],
-            "id": ["id", "unique id", "record id", "identifier", "reference", "ref"],
+
+    def fuzzy_correct_query(self, query: str, threshold: int = 80) -> Tuple[str, List[Dict]]:
+        """
+        Apply fuzzy matching to correct typos in query against Pinecone metadata
+        
+        Args:
+            query: User's input query (potentially with typos)
+            threshold: Minimum fuzzy match score (0-100)
+        
+        Returns:
+            Tuple of (corrected_query, list_of_corrections)
+        
+        Example:
+            Input: "Show me Dr. Prya Shrama in cardilogist"
+            Output: ("Show me Dr. Priya Sharma in cardiologist", [...corrections...])
+        """
+        if not FUZZY_AVAILABLE:
+            return query, []
+        
+        corrections = []
+        corrected_query = query
+        words = query.split()
+        
+        # Try to match multi-word phrases (doctor names)
+        for i in range(len(words)):
+            for j in range(min(i + 4, len(words)), i, -1):  # Up to 4-word phrases
+                phrase = ' '.join(words[i:j])
+                
+                # Match against doctor names
+                if self.metadata_cache['doctors']:
+                    result = process.extractOne(
+                        phrase,
+                        self.metadata_cache['doctors'],
+                        scorer=fuzz.WRatio,
+                        score_cutoff=threshold - 5  # Slightly lower for names
+                    )
+                    
+                    if result:
+                        matched_name, score, _ = result
+                        if score >= threshold - 5:  # Only use high-confidence matches
+                            corrected_query = corrected_query.replace(phrase, matched_name)
+                            corrections.append({
+                                'original': phrase,
+                                'corrected': matched_name,
+                                'type': 'doctor_name',
+                                'confidence': score,
+                                'source': 'pinecone_metadata'
+                            })
+                            logger.info(f"Fuzzy matched doctor: '{phrase}' -> '{matched_name}' (score: {score})")
+                            break
+        
+        # Match individual words against specialties
+        for word in words:
+            clean_word = re.sub(r'[^\w\s]', '', word)
+            if len(clean_word) < 3:  # Skip very short words
+                continue
+            
+            # Try specialty matching
+            if self.metadata_cache['specialties']:
+                result = process.extractOne(
+                    clean_word,
+                    self.metadata_cache['specialties'],
+                    scorer=fuzz.WRatio,
+                    score_cutoff=threshold
+                )
+                
+                if result:
+                    matched_specialty, score, _ = result
+                    corrected_query = re.sub(
+                        r'\b' + re.escape(clean_word) + r'\b',
+                        matched_specialty,
+                        corrected_query,
+                        flags=re.IGNORECASE
+                    )
+                    corrections.append({
+                        'original': clean_word,
+                        'corrected': matched_specialty,
+                        'type': 'specialty',
+                        'confidence': score,
+                        'source': 'pinecone_metadata'
+                    })
+                    logger.info(f"Fuzzy matched specialty: '{clean_word}' -> '{matched_specialty}' (score: {score})")
+        
+        # Match against departments
+        for word in words:
+            clean_word = re.sub(r'[^\w\s]', '', word)
+            if len(clean_word) < 3:
+                continue
+            
+            if self.metadata_cache['departments']:
+                result = process.extractOne(
+                    clean_word,
+                    self.metadata_cache['departments'],
+                    scorer=fuzz.WRatio,
+                    score_cutoff=threshold
+                )
+                
+                if result:
+                    matched_dept, score, _ = result
+                    corrected_query = re.sub(
+                        r'\b' + re.escape(clean_word) + r'\b',
+                        matched_dept,
+                        corrected_query,
+                        flags=re.IGNORECASE
+                    )
+                    corrections.append({
+                        'original': clean_word,
+                        'corrected': matched_dept,
+                        'type': 'department',
+                        'confidence': score,
+                        'source': 'pinecone_metadata'
+                    })
+                    logger.info(f"Fuzzy matched department: '{clean_word}' -> '{matched_dept}' (score: {score})")
+        
+        if corrections:
+            logger.info(f"Query correction: '{query}' -> '{corrected_query}' ({len(corrections)} changes)")
+        
+        return corrected_query, corrections
+
+    def fuzzy_match_metadata_field(
+        self, 
+        field_name: str, 
+        query_value: str,
+        top_k: int = 5,
+        threshold: int = 75
+    ) -> List[Dict]:
+        """
+        Fuzzy match against specific metadata field from Pinecone cache
+        
+        Args:
+            field_name: 'doctor_name', 'specialty', 'phone', 'full_name', etc.
+            query_value: Value to match (with potential typos)
+            top_k: Number of matches to return
+            threshold: Minimum score (0-100)
+        
+        Returns:
+            List of matches with scores
+        
+        Example:
+            field_name='doctor_name', query_value='Dr. Smit'
+            Returns: [{'value': 'Dr. Smith', 'score': 85, 'type': 'doctor_name'}]
+        """
+        if not FUZZY_AVAILABLE:
+            return []
+        
+        # Map field names to cache keys
+        field_mapping = {
+            'doctor_name': 'doctors',
+            'specialty': 'specialties',
+            'department': 'departments',
+            'full_name': 'full_names',
+            'phone': 'phones',
+            'record_id': 'record_ids',
+            'unique_id': 'unique_ids'
         }
+        
+        cache_key = field_mapping.get(field_name, field_name)
+        candidates = self.metadata_cache.get(cache_key, [])
+        
+        if not candidates:
+            logger.warning(f"No cached values for field: {field_name}")
+            return []
+        
+        try:
+            # Use process.extract to get multiple matches
+            matches = process.extract(
+                query_value,
+                candidates,
+                scorer=fuzz.WRatio,
+                limit=top_k,
+                score_cutoff=threshold
+            )
+            
+            results = []
+            for matched_value, score, _ in matches:
+                results.append({
+                    'value': matched_value,
+                    'score': score,
+                    'type': field_name,
+                    'original_query': query_value
+                })
+            
+            if results:
+                logger.info(
+                    f"Fuzzy matched {field_name}: '{query_value}' -> "
+                    f"{len(results)} matches (best: {results[0]['value']}, score: {results[0]['score']})"
+                )
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Fuzzy matching failed for {field_name}: {e}")
+            return []
 
     def detect_id_in_query(self, query: str) -> Dict[str, Any]:
         """
-        Enhanced ID detection with better pattern matching
+        Enhanced ID detection with fuzzy fallback
         """
-        query_lower = query.lower()
 
         # Check for record ID
         if match := self.patterns["record_id"].search(query):
-            logger.info(f"Detected RECORD_ID: {match.group()}")
+            record_id = match.group()
+            
+            # Try fuzzy match if exact pattern found
+            if FUZZY_AVAILABLE and self.metadata_cache['record_ids']:
+                fuzzy_matches = self.fuzzy_match_metadata_field(
+                    'record_id', record_id, top_k=1, threshold=90
+                )
+                if fuzzy_matches:
+                    logger.info(f"Using fuzzy matched record_id: {fuzzy_matches[0]['value']}")
+                    record_id = fuzzy_matches[0]['value']
+            
             return {
                 "is_id_query": True,
                 "id_type": "record_id",
-                "id_value": match.group(),
+                "id_value": record_id,
                 "original_query": query,
             }
 
-        # Check for formatted phone
+        # Check for phone numbers
         if match := self.patterns["phone_formatted"].search(query):
-            cleaned_phone = match.group().strip()
-            phone_digits = len(re.sub(r"\D", "", cleaned_phone))
+            phone = match.group().strip()
+            phone_digits = len(re.sub(r"\D", "", phone))
+            
             if 10 <= phone_digits <= 14:
-                logger.info(f"Detected PHONE (formatted): {cleaned_phone}")
+                # Try fuzzy match
+                if FUZZY_AVAILABLE and self.metadata_cache['phones']:
+                    fuzzy_matches = self.fuzzy_match_metadata_field(
+                        'phone', phone, top_k=1, threshold=85
+                    )
+                    if fuzzy_matches:
+                        logger.info(f"Using fuzzy matched phone: {fuzzy_matches[0]['value']}")
+                        phone = fuzzy_matches[0]['value']
+                
                 return {
                     "is_id_query": True,
                     "id_type": "phone",
-                    "id_value": cleaned_phone,
+                    "id_value": phone,
                     "original_query": query,
                 }
 
-        # Check for plain phone
         if match := self.patterns["phone_plain"].search(query):
-            phone_number = match.group()
-            logger.info(f"Detected PHONE (plain): {phone_number}")
+            phone = match.group()
+            
+            # Fuzzy fallback
+            if FUZZY_AVAILABLE and self.metadata_cache['phones']:
+                fuzzy_matches = self.fuzzy_match_metadata_field(
+                    'phone', phone, top_k=1, threshold=85
+                )
+                if fuzzy_matches:
+                    phone = fuzzy_matches[0]['value']
+            
             return {
                 "is_id_query": True,
                 "id_type": "phone",
-                "id_value": phone_number,
+                "id_value": phone,
                 "original_query": query,
             }
 
-        # Check for unique ID with hyphens
+        # Check for unique IDs
         if match := self.patterns["unique_id_hyphen"].search(query):
-            logger.info(f"Detected UNIQUE_ID (hyphenated): {match.group()}")
+            unique_id = match.group()
+            
+            if FUZZY_AVAILABLE and self.metadata_cache['unique_ids']:
+                fuzzy_matches = self.fuzzy_match_metadata_field(
+                    'unique_id', unique_id, top_k=1, threshold=85
+                )
+                if fuzzy_matches:
+                    unique_id = fuzzy_matches[0]['value']
+            
             return {
                 "is_id_query": True,
                 "id_type": "unique_id",
-                "id_value": match.group(),
+                "id_value": unique_id,
                 "original_query": query,
             }
-
-        # Check for unique ID without hyphens
-        if match := self.patterns["unique_id_plain"].search(query):
-            logger.info(f"Detected UNIQUE_ID (plain): {match.group()}")
-            return {
-                "is_id_query": True,
-                "id_type": "unique_id",
-                "id_value": match.group(),
-                "original_query": query,
-            }
-
-        # Context-based detection for phone
-        if any(kw in query_lower for kw in self.keywords["phone"]):
-            words = query.split()
-            for word in words:
-                cleaned = word.strip(',.?!:;()[]{}"\'"')
-                if cleaned.isdigit() and 10 <= len(cleaned) <= 14:
-                    logger.info(f"Detected PHONE from context: {cleaned}")
-                    return {
-                        "is_id_query": True,
-                        "id_type": "phone",
-                        "id_value": cleaned,
-                        "original_query": query,
-                    }
-
-        # Context-based detection for ID
-        if any(kw in query_lower for kw in self.keywords["id"]):
-            words = query.split()
-            for word in words:
-                cleaned = word.strip(',.?!:;()[]{}"\'"')
-                if cleaned.isdigit() and len(cleaned) >= 15:
-                    logger.info(f"Detected RECORD_ID from context: {cleaned}")
-                    return {
-                        "is_id_query": True,
-                        "id_type": "record_id",
-                        "id_value": cleaned,
-                        "original_query": query,
-                    }
 
         logger.info("No ID/Phone detected - using semantic search")
         return {
@@ -201,7 +494,7 @@ class HybridRAGQueryEngine:
         self, id_type: str, id_value: str, top_k: int = 10
     ) -> List[Document]:
         """
-        Optimized exact ID matching with better fallback
+        Enhanced exact ID matching with fuzzy fallback
         """
         logger.info(f"Exact ID Search: {id_type} = {id_value}")
 
@@ -231,11 +524,52 @@ class HybridRAGQueryEngine:
                 ]
                 return docs
 
-            # Fallback: Partial match on text content
-            logger.warning(f"No exact matches, trying partial search")
+            # Fuzzy fallback - try similar IDs
+            logger.warning(f"No exact matches, trying fuzzy ID search")
+            
+            if FUZZY_AVAILABLE:
+                fuzzy_matches = self.fuzzy_match_metadata_field(
+                    field_name=id_type,
+                    query_value=id_value,
+                    top_k=3,
+                    threshold=80
+                )
+                
+                if fuzzy_matches:
+                    logger.info(f"Found {len(fuzzy_matches)} fuzzy ID matches")
+                    all_docs = []
+                    
+                    for fuzzy_match in fuzzy_matches:
+                        corrected_id = fuzzy_match['value']
+                        
+                        # Query with corrected ID
+                        results = self.index.query(
+                            vector=query_embedding,
+                            filter={id_type: {"$eq": corrected_id}},
+                            top_k=3,
+                            namespace=self.namespace,
+                            include_metadata=True,
+                        )
+                        
+                        for match in results.matches:
+                            metadata = match.metadata.copy()
+                            metadata['fuzzy_match'] = True
+                            metadata['fuzzy_confidence'] = fuzzy_match['score']
+                            metadata['original_query_value'] = id_value
+                            metadata['matched_value'] = corrected_id
+                            
+                            all_docs.append(Document(
+                                page_content=metadata.get("text", ""),
+                                metadata=metadata
+                            ))
+                    
+                    if all_docs:
+                        return all_docs[:top_k]
+            
+            # Final fallback: semantic search
             return self.retrieve_semantic(
                 f"information about {id_type} {id_value}",
-                top_k=top_k * 2,  # Cast wider net
+                top_k=top_k
             )
 
         except Exception as e:
@@ -246,25 +580,39 @@ class HybridRAGQueryEngine:
         self, query: str, top_k: int = None, score_threshold: float = None
     ) -> List[Document]:
         """
-        Optimized semantic search with MMR for diversity
+        ENHANCED: Semantic search with automatic query correction
         """
         if top_k is None:
             top_k = self.top_k
         if score_threshold is None:
             score_threshold = self.similarity_threshold
 
+        # Apply fuzzy correction before semantic search
+        corrected_query, corrections = self.fuzzy_correct_query(query)
+        
+        if corrections:
+            logger.info(f"Using corrected query for semantic search: '{corrected_query}'")
+            query = corrected_query
+
         try:
-            # Use MMR (Maximal Marginal Relevance) for diversity
+            # Use MMR for diversity
             retriever = self.vectorstore.as_retriever(
-                search_type="mmr",  # Changed from "similarity"
+                search_type="mmr",
                 search_kwargs={
                     "k": top_k,
-                    "fetch_k": top_k * 3,  # Fetch more candidates
-                    "lambda_mult": 0.7,  # Balance relevance vs diversity
+                    "fetch_k": top_k * 3,
+                    "lambda_mult": 0.7,
                 },
             )
 
             docs = retriever.invoke(query)
+
+            # Add correction info to metadata
+            if corrections:
+                for doc in docs:
+                    doc.metadata['query_corrected'] = True
+                    doc.metadata['original_query'] = query
+                    doc.metadata['corrections'] = corrections
 
             # Filter by relevance score if available
             if hasattr(docs[0], "metadata") and "score" in docs[0].metadata:
@@ -276,27 +624,32 @@ class HybridRAGQueryEngine:
             return docs
 
         except Exception as e:
-            logger.error(f"Error in semantic search: {str(e)}")
+            logger.error(f"Error in semantic search: {e}")
             return []
 
     def hybrid_retrieve(
         self, query: str, top_k: int = None
     ) -> Tuple[List[Document], str]:
         """
-        Optimized hybrid retrieval with better fallback logic
+        ENHANCED: Hybrid retrieval with fuzzy correction
         """
         if top_k is None:
             top_k = self.top_k
 
-        id_info = self.detect_id_in_query(query)
+        # First, try to correct the query
+        corrected_query, corrections = self.fuzzy_correct_query(query)
+        
+        # Use corrected query for ID detection
+        id_info = self.detect_id_in_query(corrected_query)
 
         if id_info["is_id_query"]:
             docs = self.retrieve_by_id(id_info["id_type"], id_info["id_value"], top_k)
 
             # If exact match returns too few results, supplement with semantic
             if len(docs) < 3:
-                logger.info("Supplementing with semantic search")
-                semantic_docs = self.retrieve_semantic(query, top_k // 2)
+                logger.info("Supplementing ID search with semantic search")
+                semantic_docs = self.retrieve_semantic(corrected_query, top_k // 2)
+                
                 # Merge and deduplicate
                 seen_ids = {
                     doc.metadata.get("id") for doc in docs if "id" in doc.metadata
@@ -309,33 +662,5 @@ class HybridRAGQueryEngine:
 
             return docs, f"{id_info['id_type']}_match"
         else:
-            docs = self.retrieve_semantic(query, top_k)
+            docs = self.retrieve_semantic(corrected_query, top_k)
             return docs, "semantic"
-
-    def rerank_documents(self, docs: List[Document], query: str) -> List[Document]:
-        """
-        Optional: Rerank documents for better relevance
-        """
-        if not docs:
-            return docs
-
-        # Simple keyword-based boosting
-        query_terms = set(query.lower().split())
-
-        def relevance_score(doc):
-            content_lower = doc.page_content.lower()
-            # Count query term matches
-            matches = sum(1 for term in query_terms if term in content_lower)
-            # Boost if metadata matches
-            metadata_boost = 0
-            for key, value in doc.metadata.items():
-                if key in ["full_name", "phone", "record_id", "unique_id"]:
-                    if str(value).lower() in query.lower():
-                        metadata_boost += 2
-            return matches + metadata_boost
-
-        # Sort by relevance
-        docs_with_scores = [(doc, relevance_score(doc)) for doc in docs]
-        docs_with_scores.sort(key=lambda x: x[1], reverse=True)
-
-        return [doc for doc, score in docs_with_scores]
