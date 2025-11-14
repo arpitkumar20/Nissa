@@ -63,13 +63,11 @@ async def lifespan(app: FastAPI):
         stateless_agent = create_stateless_agent()
         bot = ChatManager(agent=stateless_agent, history_manager=history_db)
         app.state.bot = bot
-        logger.info("✓ ChatManager initialized and attached to app.state.bot")
     except Exception as e:
         logger.error(f"Bot initialization failed: {e}", exc_info=True)
     # Initialize Database
     try:
         initialize_db()
-        logger.info("✓ Database initialized")
     except Exception as e:
         logger.error("Cannot start server without database. Exiting...", exc_info=True)
         # Fail fast: raise to stop startup
@@ -77,9 +75,8 @@ async def lifespan(app: FastAPI):
     # Initialize RAG Engine
     try:
         namespace = load_namespace()
-        print("✓ Loaded namespace:", namespace)
         get_rag_engine(namespace)
-        logger.info("✓ RAG engine initialized")
+
     except Exception as e:
         logger.error(f"RAG Engine initialization failed: {e}", exc_info=True)
 

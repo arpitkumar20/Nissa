@@ -64,7 +64,6 @@ def main():
             for var in missing_vars:
                 print(f"{var}")
         # Start the server
-        print("✓ Starting server...\n")
         run_server(host=host, port=port, debug=debug)
     except ImportError as e:
         print("ERROR: Failed to import required modules")

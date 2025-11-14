@@ -61,7 +61,6 @@ try:
     TEMPLATE_DIR = base_dir / "templates"
     
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
-    logger.info(f"Templates directory successfully set to: {TEMPLATE_DIR}")
 
 except Exception as e:
     logger.error(f"CRITICAL: Failed to initialize Jinja2Templates: {e}")
