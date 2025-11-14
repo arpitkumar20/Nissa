@@ -202,6 +202,32 @@ def initialize_db():
                     CREATE INDEX IF NOT EXISTS idx_leads_is_active ON leads(is_active);
                 """)
 
+                # Checkpoint tracking table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS ingestion_checkpoints (
+                        id SERIAL PRIMARY KEY,
+                        job_id VARCHAR(50) NOT NULL,
+                        company_name VARCHAR(255) NOT NULL,
+                        phase VARCHAR(50) NOT NULL,
+                        checkpoint_data JSONB NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(job_id, phase)
+                    );
+                    
+                    CREATE INDEX IF NOT EXISTS idx_checkpoint_job_phase 
+                    ON ingestion_checkpoints(job_id, phase);
+                    
+                    CREATE INDEX IF NOT EXISTS idx_checkpoint_company 
+                    ON ingestion_checkpoints(company_name);
+                    
+                    CREATE INDEX IF NOT EXISTS idx_checkpoint_updated 
+                    ON ingestion_checkpoints(updated_at DESC);
+                    
+                    COMMENT ON TABLE ingestion_checkpoints IS 
+                    'Stores checkpoint data for crash recovery during ingestion';
+                """)
+                
             conn.commit()
             logger.info(
                 "✓ Database tables initialized successfully (including table-level tracking)"

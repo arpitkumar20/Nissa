@@ -601,3 +601,63 @@ class JobManager:
         finally:
             if conn:
                 self.pool.putconn(conn)
+    
+    
+    def get_latest_interruptible_job(self, company_name: str) -> Optional[Dict]:
+        """Get the latest FAILED or long-RUNNING job with checkpoints"""
+        conn = None
+        try:
+            conn = self.pool.getconn()
+            with conn.cursor() as cur:
+                # Find latest job that's FAILED or stuck in RUNNING for >5 minutes
+                cur.execute("""
+                    SELECT ij.job_id, ij.status, ij.error_message, ij.created_at, ij.updated_at
+                    FROM ingestion_jobs ij
+                    WHERE ij.company_name = %s 
+                    AND (
+                        ij.status = 'failed'
+                        OR (ij.status = 'running' AND ij.updated_at < NOW() - INTERVAL '5 minutes')
+                    )
+                    AND EXISTS (
+                        SELECT 1 FROM ingestion_checkpoints ic 
+                        WHERE ic.job_id = ij.job_id
+                    )
+                    ORDER BY ij.created_at DESC
+                    LIMIT 1
+                """, (company_name,))
+                
+                row = cur.fetchone()
+                if row:
+                    job_id = row[0]
+                    logger.info(f"Found resumable job: {job_id} (status: {row[1]})")
+                    
+                    # Reset to PENDING
+                    cur.execute("""
+                        UPDATE ingestion_jobs 
+                        SET status = %s, 
+                            error_message = NULL,
+                            updated_at = NOW()
+                        WHERE job_id = %s
+                    """, (JobStatus.PENDING, job_id))
+                    
+                    conn.commit()
+                    
+                    return {
+                        'job_id': job_id,
+                        'status': JobStatus.PENDING,
+                        'created_at': row[3].isoformat() if row[3] else None,
+                        'resumed': True
+                    }
+                
+                return None
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Failed to check for resumable jobs: {e}")
+            return None
+        finally:
+            if conn:
+                try:
+                    self.pool.putconn(conn)
+                except:
+                    pass

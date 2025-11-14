@@ -55,7 +55,10 @@ class JSONStringLoader(BaseLoader):
         json_string = self.json_to_text(data)
 
         yield Document(page_content=json_string, metadata={"source": self.file_path})
-
+    
+    def load(self) -> List[Document]:
+        """Return all documents as a list for compatibility with LangChain loaders"""
+        return list(self.lazy_load())
 
 class DocumentLoader:
     """Handles loading documents from various file formats"""

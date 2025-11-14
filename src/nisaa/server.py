@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import os
@@ -22,10 +23,14 @@ from src.nisaa.sql_agent.chat_manager import ChatManager
 
 from src.nisaa.rag.node import get_rag_engine
 
+
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+shutdown_in_progress = False
+
 
 def load_namespace() -> str:
     """Load company namespace from web_info/web_info.json"""
@@ -47,34 +52,25 @@ def load_namespace() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    Lifespan context manager for startup and shutdown.
-
-    Startup:
-      - initialize ChatManager (agent + history)
-      - initialize DB pool
-      - initialize RAG engine (best-effort)
-
-    Shutdown:
-      - close DB pool connections if present
+    Lifespan context manager for startup and shutdown with GRACEFUL handling
     """
-    # Initialize ChatManager
+    # STARTUP
     try:
         history_db = PostgresChatHistory()
         stateless_agent = create_stateless_agent()
         bot = ChatManager(agent=stateless_agent, history_manager=history_db)
         app.state.bot = bot
-        logger.info("✓ ChatManager initialized and attached to app.state.bot")
+        logger.info("✓ ChatManager initialized")
     except Exception as e:
         logger.error(f"Bot initialization failed: {e}", exc_info=True)
-    # Initialize Database
+    
     try:
         initialize_db()
         logger.info("✓ Database initialized")
     except Exception as e:
         logger.error("Cannot start server without database. Exiting...", exc_info=True)
-        # Fail fast: raise to stop startup
         raise RuntimeError(f"Database initialization failed: {e}")
-    # Initialize RAG Engine
+    
     try:
         namespace = load_namespace()
         print("✓ Loaded namespace:", namespace)
@@ -83,20 +79,66 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"RAG Engine initialization failed: {e}", exc_info=True)
 
-    # Hand control back to FastAPI (app starts serving)
+    # SERVER RUNS HERE
     try:
         yield
     finally:
-        logger.info("Shutting down Nisaa API Server...")
-        # Graceful DB pool close if available
+        # ============================================================
+        # GRACEFUL SHUTDOWN WITH PROPER ORDERING
+        # ============================================================
+        global shutdown_in_progress
+        shutdown_in_progress = True
+        
+        logger.info("🛑 Shutting down Nisaa API Server...")
+        
+        # Step 1: Signal all background tasks to stop
+        try:
+            from main import background_tasks_running
+            if background_tasks_running:
+                logger.info(f"⏳ Signaling {len(background_tasks_running)} background task(s) to stop...")
+                
+                # Cancel all tasks (triggers CancelledError in run_ingestion_pipeline)
+                for task in background_tasks_running:
+                    if not task.done():
+                        task.cancel()
+                
+                # Give tasks time to cleanup and save checkpoints
+                logger.info("⏳ Waiting up to 15 seconds for graceful shutdown...")
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*background_tasks_running, return_exceptions=True),
+                        timeout=15.0
+                    )
+                    logger.info("✅ All background tasks stopped gracefully")
+                except asyncio.TimeoutError:
+                    logger.warning("⚠️ Some tasks didn't finish within 15 seconds")
+                    logger.warning("💡 Checkpoints were saved - you can resume by restarting ingestion")
+                    
+                    # Log which tasks are still running
+                    still_running = [t for t in background_tasks_running if not t.done()]
+                    if still_running:
+                        logger.warning(f"⚠️ {len(still_running)} task(s) still running")
+                    
+        except ImportError:
+            logger.warning("Could not import background task tracking")
+        except Exception as e:
+            logger.error(f"Error during task cancellation: {e}")
+        
+        # Step 2: Close database connections (even if tasks still running)
         try:
             pool = get_pool()
-            if pool:
+            if pool and not pool.closed:
+                # Give any pending DB operations time to complete
+                await asyncio.sleep(1)
                 pool.closeall()
-                logger.info("✓ Database connections closed")
+                logger.info("✅ Database connections closed")
         except Exception as e:
-            logger.error(f"Error closing database connections: {e}", exc_info=True)
-
+            logger.error(f"Error closing database pool: {e}")
+        
+        # Step 3: Final status
+        logger.info("🚪 Server shutdown sequence complete")
+        logger.info("📝 Interrupted jobs have saved checkpoints")
+        logger.info("🔄 Resume by calling the ingestion endpoint again with same company name")
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application instance."""

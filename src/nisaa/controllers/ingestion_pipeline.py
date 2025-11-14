@@ -16,6 +16,11 @@ from nisaa.utils.website_scrap import WebsiteIngester
 from nisaa.utils.document_loader import DocumentLoader
 from nisaa.utils.sql_database import SQLDatabaseIngester
 
+from nisaa.services.checkpoint_manager import CheckpointManager, ProcessedItemTracker
+import threading    
+
+
+
 class DataIngestionPipeline:
     """OPTIMIZED: Unified data ingestion pipeline with clean progress tracking"""
 
@@ -28,6 +33,8 @@ class DataIngestionPipeline:
         website_urls: Optional[List[str]] = None,
         preprocess_config: Optional[Dict[str, bool]] = None,
         proxies: Optional[dict] = None,
+        db_pool = None,  
+        job_id: str = None, 
     ):
         self.company_namespace = company_namespace
         self.directory_path = directory_path
@@ -89,6 +96,15 @@ class DataIngestionPipeline:
             "new": [],
             "skipped": []
         }
+
+        self.job_id = job_id
+        self.checkpoint_manager = None
+        self.cancellation_event = threading.Event() 
+
+        if db_pool and job_id:
+            self.checkpoint_manager = CheckpointManager(db_pool)
+            self.checkpoint_manager.company_name = company_namespace  # Store for convenience
+            logger.info("✓ Checkpoint/recovery system initialized")
 
     def enrich_metadata(self, doc: Document, urls: List[Dict[str, str]]) -> Document:
         """Enrich document metadata"""
@@ -201,6 +217,10 @@ class DataIngestionPipeline:
                     }
 
                     for future in as_completed(futures):
+                        if self.cancellation_event.is_set():
+                            logger.warning("⚠️ Document processing cancelled")
+                            executor.shutdown(wait=False, cancel_futures=True)
+                            break
                         try:
                             processed_doc = future.result()
                             if processed_doc:
@@ -302,12 +322,7 @@ class DataIngestionPipeline:
         return all_db_docs
 
     def process_json_files(self) -> tuple:
-        """
-        UPDATED: Process JSON files with Zoho awareness
-        
-        Zoho files have already been deduplicated by content hash,
-        so we only process the new ones passed to the pipeline
-        """
+        """Process JSON files with checkpointing"""
         if not self.document_loader:
             return [], []
 
@@ -319,7 +334,7 @@ class DataIngestionPipeline:
         if not json_files:
             return [], []
 
-        print(f"\n Processing {len(json_files)} JSON files...")
+        print(f"\n 📊 Processing {len(json_files)} JSON files...")
 
         all_chunks = []
         all_entities = []
@@ -327,7 +342,13 @@ class DataIngestionPipeline:
         with tqdm(total=len(json_files), desc="JSON files", unit="file") as pbar:
             for json_file in json_files:
                 try:
-                    chunks, entities = self.json_processor.process_json_file(json_file)
+                    chunks, entities = self.json_processor.process_json_file(
+                        json_file,
+                        checkpoint_manager=self.checkpoint_manager,  
+                        job_id=self.job_id,                         
+                        company_name=self.company_namespace,
+                        cancellation_event=self.cancellation_event  
+                    )                    
                     all_chunks.extend(chunks)
                     all_entities.extend(entities)
                     self.stats["json_documents"] += 1
@@ -337,52 +358,57 @@ class DataIngestionPipeline:
                 pbar.update(1)
 
         self.stats["json_chunks"] = len(all_chunks)
-        print(f"Created {len(all_chunks)} JSON chunks")
+        print(f"✓ Created {len(all_chunks)} JSON chunks")
 
         return all_chunks, all_entities
 
+
     def chunk_and_embed_documents(self, documents: List[Document]) -> tuple:
-        """OPTIMIZED: Chunk and embed with progress"""
+        """OPTIMIZED: Chunk and embed with progress and checkpointing"""
         if not documents:
             return [], [], []
 
-        print(f"\n Chunking {len(documents)} documents...")
+        print(f"\n 📦 Chunking {len(documents)} documents...")
 
         with tqdm(total=1, desc="Chunking", leave=False) as pbar:
             chunks = self.text_splitter.split_documents(documents)
             self.stats["total_chunks"] = len(chunks)
             pbar.update(1)
 
-        print(f" Created {len(chunks)} chunks")
+        print(f"✓ Created {len(chunks)} chunks")
 
-        # Extract data
         texts = [chunk.page_content for chunk in chunks]
         metadatas = [chunk.metadata for chunk in chunks]
 
-        # Generate embeddings SEQUENTIALLY (updated service handles this)
-        print(f"\n Generating embeddings for {len(texts)} chunks...")
-        embeddings = self.embedding_service.generate_for_documents(texts)
+        # Generate embeddings WITH CHECKPOINTING (no item_tracker)
+        print(f"\n 🔮 Generating embeddings for {len(texts)} chunks...")
+        embeddings = self.embedding_service.generate_for_documents(
+            texts,
+            checkpoint_manager=self.checkpoint_manager,
+            job_id=self.job_id,
+            cancellation_event=self.cancellation_event  
+        )
 
         self.stats["total_embeddings"] = len(embeddings)
-        print(f" Generated {len(embeddings)} embeddings")
+        print(f"✅ Generated {len(embeddings)} embeddings")
 
         return texts, embeddings, metadatas
 
     def store_to_pinecone(
-        self,
-        texts: List[str],
-        embeddings: List[List[float]],
-        metadatas: List[Dict],
-        json_chunks: List[str] = None,
-        json_embeddings: List[List[float]] = None,
-        json_entities: List[tuple] = None,
+    self,
+    texts: List[str],
+    embeddings: List[List[float]],
+    metadatas: List[Dict],
+    json_chunks: List[str] = None,
+    json_embeddings: List[List[float]] = None,
+    json_entities: List[tuple] = None,
     ):
-        """OPTIMIZED: Store with progress tracking"""
+        """OPTIMIZED: Store with progress tracking and checkpointing"""
         namespace = self.company_namespace
         total_upserted = 0
 
         if texts and embeddings:
-            print(f"\n Storing {len(texts)} document vectors...")
+            print(f"\n 💾 Storing {len(texts)} document vectors...")
 
             with tqdm(total=1, desc="Preparing vectors", leave=False) as pbar:
                 ids, vectors, processed_metadatas = (
@@ -392,19 +418,24 @@ class DataIngestionPipeline:
                 )
                 pbar.update(1)
 
+            # Upsert WITH CHECKPOINTING (no item_tracker)
             upserted = self.vector_store.upsert_vectors(
                 ids,
                 vectors,
                 processed_metadatas,
                 namespace,
                 int(os.getenv("PINECONE_BATCH_SIZE", "100")),
+                checkpoint_manager=self.checkpoint_manager,
+                job_id=self.job_id,
+                cancellation_event=self.cancellation_event  
+
             )
             total_upserted += upserted
-            print(f"Stored {upserted} vectors")
+            print(f"✅ Stored {upserted} vectors")
 
-        # Store JSON chunks
+        # Store JSON chunks WITH CHECKPOINTING (no item_tracker)
         if json_chunks and json_embeddings:
-            print(f"\n Storing {len(json_chunks)} JSON vectors...")
+            print(f"\n 💾 Storing {len(json_chunks)} JSON vectors...")
 
             with tqdm(total=1, desc="Preparing JSON vectors", leave=False) as pbar:
                 json_vectors = self.vector_store.prepare_json_vectors(
@@ -413,148 +444,176 @@ class DataIngestionPipeline:
                 pbar.update(1)
 
             upserted = self.vector_store.upsert_json_vectors(
-                json_vectors, namespace, 100
+                json_vectors, 
+                namespace, 
+                100,
+                checkpoint_manager=self.checkpoint_manager,
+                job_id=self.job_id
             )
             total_upserted += upserted
-            print(f"Stored {upserted} JSON vectors")
+            print(f"✅ Stored {upserted} JSON vectors")
 
         self.stats["vectors_upserted"] = total_upserted
 
-        print("\n Verifying upload...")
+        print("\n 🔍 Verifying upload...")
         self.vector_store.verify_upsert(namespace, total_upserted)
-
+        
     def run(self, job_manager=None, company_name=None) -> Dict[str, Any]:
         """Execute pipeline with table-level database deduplication"""
-        start_time = datetime.now()
 
-        processed_documents = []
-        website_docs = []
-        texts = []
-        embeddings = []
-        metadatas = []
-        json_chunks = []
-        json_embeddings = []
-        json_entities = []
+        try:
+            start_time = datetime.now()
 
-        print("\n" + "="*70)
-        print(f"SEQUENTIAL DATA INGESTION: {self.company_namespace.upper()}")
-        print("="*70)
-        print("\n" + "="*70)
-        print("PHASE 1: LOADING & PROCESSING STANDARD DOCUMENTS")
-        print("="*70)
+            processed_documents = []
+            website_docs = []
+            texts = []
+            embeddings = []
+            metadatas = []
+            json_chunks = []
+            json_embeddings = []
+            json_entities = []
 
-        if job_manager and company_name and self.website_urls:
             print("\n" + "="*70)
-            print("PHASE 1A: WEBSITE DEDUPLICATION")
+            print(f"SEQUENTIAL DATA INGESTION: {self.company_namespace.upper()}")
             print("="*70)
-            website_docs = self.load_and_deduplicate_websites(job_manager, company_name)
-        
-        db_docs = []
-        if job_manager and company_name and self.db_uris:
             print("\n" + "="*70)
-            print("PHASE 1B: DATABASE TABLE-LEVEL PROCESSING")
+            print("PHASE 1: LOADING & PROCESSING STANDARD DOCUMENTS")
             print("="*70)
-            # db_uris now contains structured data with table filtering
-            db_docs = self.load_and_deduplicate_databases(job_manager, company_name, self.db_uris)
-        
-        processed_documents = self.load_and_process_standard_documents()
-        
-        if db_docs:
-            processed_documents.extend(db_docs)
-            self.stats["total_documents"] += len(db_docs)
-        
-        if website_docs:
-            processed_documents.extend(website_docs)
-            self.stats["total_documents"] += len(website_docs)
 
-        if processed_documents:
-            texts, embeddings, metadatas = self.chunk_and_embed_documents(
-                processed_documents
-            )
-
-            if texts and embeddings:
+            if job_manager and company_name and self.website_urls:
                 print("\n" + "="*70)
-                print("STORING STANDARD DOCUMENT VECTORS")
+                print("PHASE 1A: WEBSITE DEDUPLICATION")
+                print("="*70)
+                website_docs = self.load_and_deduplicate_websites(job_manager, company_name)
+            
+            db_docs = []
+            if job_manager and company_name and self.db_uris:
+                print("\n" + "="*70)
+                print("PHASE 1B: DATABASE TABLE-LEVEL PROCESSING")
+                print("="*70)
+                # db_uris now contains structured data with table filtering
+                db_docs = self.load_and_deduplicate_databases(job_manager, company_name, self.db_uris)
+            
+            processed_documents = self.load_and_process_standard_documents()
+            
+            if db_docs:
+                processed_documents.extend(db_docs)
+                self.stats["total_documents"] += len(db_docs)
+            
+            if website_docs:
+                processed_documents.extend(website_docs)
+                self.stats["total_documents"] += len(website_docs)
+
+            if processed_documents:
+                texts, embeddings, metadatas = self.chunk_and_embed_documents(
+                    processed_documents
+                )
+
+                if texts and embeddings:
+                    print("\n" + "="*70)
+                    print("STORING STANDARD DOCUMENT VECTORS")
+                    print("="*70)
+                    
+                    namespace = self.company_namespace
+                    
+                    print(f"\n Storing {len(texts)} document vectors...")
+                    with tqdm(total=1, desc="Preparing vectors", leave=False) as pbar:
+                        ids, vectors, processed_metadatas = (
+                            self.vector_store.prepare_document_vectors(
+                                texts, embeddings, metadatas, namespace
+                            )
+                        )
+                        pbar.update(1)
+
+                    upserted = self.vector_store.upsert_vectors(
+                        ids,
+                        vectors,
+                        processed_metadatas,
+                        namespace,
+                        int(os.getenv("PINECONE_BATCH_SIZE", "100")),
+                        
+                    )
+                    self.stats["vectors_upserted"] += upserted
+                    print(f"Stored {upserted} standard document vectors")
+
+                    self.vector_store.verify_upsert(namespace, upserted)
+            else:
+                print("\n No standard documents to process (all skipped or none provided)")
+
+            print("\n" + "="*70)
+            print("PHASE 2: PROCESSING JSON FILES (ZOHO DATA)")
+            print("="*70)
+            
+            json_chunks, json_entities = self.process_json_files()
+
+            if json_chunks:
+                print(f"\n Generating embeddings for {len(json_chunks)} JSON chunks...")
+                json_embeddings = self.embedding_service.generate_for_json_chunks(
+                    json_chunks,
+                    checkpoint_manager=self.checkpoint_manager,
+                    job_id=self.job_id,
+                    cancellation_event=self.cancellation_event
+                )
+                print(f"Generated {len(json_embeddings)} JSON embeddings")
+                print("\n" + "="*70)
+                print("STORING JSON VECTORS")
                 print("="*70)
                 
                 namespace = self.company_namespace
                 
-                print(f"\n Storing {len(texts)} document vectors...")
-                with tqdm(total=1, desc="Preparing vectors", leave=False) as pbar:
-                    ids, vectors, processed_metadatas = (
-                        self.vector_store.prepare_document_vectors(
-                            texts, embeddings, metadatas, namespace
-                        )
+                print(f"\n Storing {len(json_chunks)} JSON vectors...")
+                with tqdm(total=1, desc="Preparing JSON vectors", leave=False) as pbar:
+                    json_vectors = self.vector_store.prepare_json_vectors(
+                        json_chunks, json_embeddings, json_entities, namespace
                     )
                     pbar.update(1)
 
-                upserted = self.vector_store.upsert_vectors(
-                    ids,
-                    vectors,
-                    processed_metadatas,
-                    namespace,
-                    int(os.getenv("PINECONE_BATCH_SIZE", "100")),
+                upserted = self.vector_store.upsert_json_vectors(
+                    json_vectors, namespace, 100
                 )
                 self.stats["vectors_upserted"] += upserted
-                print(f"Stored {upserted} standard document vectors")
+                print(f"Stored {upserted} JSON vectors")
+                
+                print(f"\n Verifying JSON upload...")
+                self.vector_store.verify_upsert(namespace, self.stats["vectors_upserted"])
+            else:
+                print("\n No JSON files to process")
 
-                self.vector_store.verify_upsert(namespace, upserted)
-        else:
-            print("\n No standard documents to process (all skipped or none provided)")
+            end_time = datetime.now()
+            self.stats["processing_time"] = (end_time - start_time).total_seconds()
 
-        print("\n" + "="*70)
-        print("PHASE 2: PROCESSING JSON FILES (ZOHO DATA)")
-        print("="*70)
-        
-        json_chunks, json_entities = self.process_json_files()
-
-        if json_chunks:
-            print(f"\n Generating embeddings for {len(json_chunks)} JSON chunks...")
-            json_embeddings = self.embedding_service.generate_for_json_chunks(
-                json_chunks
-            )
-            print(f"Generated {len(json_embeddings)} JSON embeddings")
             print("\n" + "="*70)
-            print("STORING JSON VECTORS")
+            print("FINAL STATISTICS")
             print("="*70)
+            print(f"   Total Documents: {self.stats['total_documents']}")
+            print(f"   - Files: {self.stats['file_documents']}")
+            print(f"   - Databases: {self.stats['database_documents']}")
+            print(f"   - Websites: {self.stats['website_documents']}")
+            print(f"   - JSON: {self.stats['json_documents']}")
+            print(f"\n   Processed: {self.stats['processed_documents']}")
+            print(f"   Failed: {self.stats['failed_documents']}")
+            print(f"   Total Chunks: {self.stats['total_chunks']}")
+            print(f"   Total Embeddings: {self.stats['total_embeddings'] + self.stats['json_chunks']}")
+            print(f"   Vectors Stored: {self.stats['vectors_upserted']}")
+            print(f"   Processing Time: {self.stats['processing_time']:.2f}s")
+            print("="*70 + "\n")
+
+            if self.checkpoint_manager and self.job_id:
+                # Clear all checkpoints for this job
+                self.checkpoint_manager.clear_checkpoint(self.job_id)
+                logger.info(f"✅ Cleared all checkpoints for job {self.job_id}")
+
             
-            namespace = self.company_namespace
-            
-            print(f"\n Storing {len(json_chunks)} JSON vectors...")
-            with tqdm(total=1, desc="Preparing JSON vectors", leave=False) as pbar:
-                json_vectors = self.vector_store.prepare_json_vectors(
-                    json_chunks, json_embeddings, json_entities, namespace
-                )
-                pbar.update(1)
-
-            upserted = self.vector_store.upsert_json_vectors(
-                json_vectors, namespace, 100
-            )
-            self.stats["vectors_upserted"] += upserted
-            print(f"Stored {upserted} JSON vectors")
-            
-            print(f"\n Verifying JSON upload...")
-            self.vector_store.verify_upsert(namespace, self.stats["vectors_upserted"])
-        else:
-            print("\n No JSON files to process")
-
-        end_time = datetime.now()
-        self.stats["processing_time"] = (end_time - start_time).total_seconds()
-
-        print("\n" + "="*70)
-        print("FINAL STATISTICS")
-        print("="*70)
-        print(f"   Total Documents: {self.stats['total_documents']}")
-        print(f"   - Files: {self.stats['file_documents']}")
-        print(f"   - Databases: {self.stats['database_documents']}")
-        print(f"   - Websites: {self.stats['website_documents']}")
-        print(f"   - JSON: {self.stats['json_documents']}")
-        print(f"\n   Processed: {self.stats['processed_documents']}")
-        print(f"   Failed: {self.stats['failed_documents']}")
-        print(f"   Total Chunks: {self.stats['total_chunks']}")
-        print(f"   Total Embeddings: {self.stats['total_embeddings'] + self.stats['json_chunks']}")
-        print(f"   Vectors Stored: {self.stats['vectors_upserted']}")
-        print(f"   Processing Time: {self.stats['processing_time']:.2f}s")
-        print("="*70 + "\n")
-
-        return self.stats
+            return self.stats
+        
+        except Exception as e:
+                logger.error(f"❌ Pipeline failed: {e}")
+                
+                # Checkpoints are already saved, just log
+                if self.checkpoint_manager and self.job_id:
+                    logger.info(
+                        f"💾 Checkpoints saved for job {self.job_id}. "
+                        f"Resume by rerunning with same data"
+                    )
+                
+                raise

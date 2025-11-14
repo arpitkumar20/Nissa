@@ -16,8 +16,38 @@ from nisaa.utils.s3_downloader import download_all_files_from_s3
 from src.nisaa.config.logger import logger
 from src.nisaa.config.db import get_pool
 from src.nisaa.controllers.ingestion_pipeline import DataIngestionPipeline
+from nisaa.services.checkpoint_manager import CheckpointManager
+
 
 router = APIRouter(prefix="/data-ingestion", tags=["Data Ingestion"])
+
+
+def should_resume_job(job_manager, company_name: str) -> Optional[str]:
+    """
+    Check if there's a resumable job for this company
+    Returns job_id if found, None otherwise
+    """
+    existing_job = job_manager.get_latest_interruptible_job(company_name)
+    
+    if existing_job:
+        job_id = existing_job['job_id']
+        
+        # Check if this job actually has checkpoints
+        from nisaa.services.checkpoint_manager import CheckpointManager
+        checkpoint_manager = CheckpointManager(job_manager.pool)
+        checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
+        
+        if checkpoints:
+            logger.info(
+                f"Found resumable job {job_id} with {len(checkpoints)} checkpoint(s): "
+                f"{list(checkpoints.keys())}"
+            )
+            return job_id
+        else:
+            logger.info(f"Job {job_id} has no checkpoints, will create new job")
+            return None
+    
+    return None
 
 # Decode base64 encoded Zoho credentials from the request payload
 def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
@@ -92,7 +122,8 @@ def sanitize_company_name(company_name: str) -> str:
 
     return company_name
 
-# Run Knowledgebase ingestion pipeline for a company
+# REPLACE the run_ingestion_pipeline function in ingestion_router.py with this:
+
 async def run_ingestion_pipeline(
     job_id: str,
     company_name: str,
@@ -103,16 +134,24 @@ async def run_ingestion_pipeline(
     db_uri_list: List[str],
     website_url_list: List[str],
 ):
-    """Background task to run ingestion pipeline"""
+    """Background task to run ingestion pipeline with proper shutdown handling"""
     job_manager = JobManager(get_pool())
+    db_pool = get_pool()
+    checkpoint_manager = None
+    pipeline = None
 
     try:
+        # Initialize checkpoint manager
+        checkpoint_manager = CheckpointManager(db_pool)
+        checkpoint_manager.company_name = company_name
+        
         job_manager.update_job_status(job_id, JobStatus.RUNNING)
         logger.info(f"[{job_id}] Starting ingestion for {company_name}")
 
         zoho_files = []
         all_file_paths = []
 
+        # PHASE 1: Zoho data extraction
         if zoho_cred_encrypted and zoho_cred_encrypted.strip():
             logger.info(f"[{job_id}] PHASE 1: ZOHO DATA EXTRACTION")
 
@@ -142,6 +181,7 @@ async def run_ingestion_pipeline(
                 logger.error(f"[{job_id}] Zoho extraction failed: {zoho_error}")
                 raise
 
+        # PHASE 2: S3 file download
         if len(s3_file_keys_list) > 0:
             logger.info(f"[{job_id}] PHASE 2: S3 FILE DOWNLOAD")
 
@@ -156,6 +196,7 @@ async def run_ingestion_pipeline(
                 f"[{job_id}] ✓ Downloaded {len(downloaded_s3_files)} files from S3"
             )
 
+        # PHASE 3: Zoho file deduplication
         zoho_info = {"new": [], "skipped": []}
         if zoho_files:
             logger.info(f"[{job_id}] PHASE 3: ZOHO FILE DEDUPLICATION")
@@ -177,6 +218,7 @@ async def run_ingestion_pipeline(
                 f"{len(skipped_zoho_reports)} skipped"
             )
 
+        # PHASE 4: Regular file deduplication
         logger.info(f"[{job_id}] PHASE 4: REGULAR FILE DEDUPLICATION")
 
         new_files, skipped_files = FileDeduplicator.filter_new_files(
@@ -185,7 +227,7 @@ async def run_ingestion_pipeline(
             company_name=company_name,
         )
 
-        # NEW: Add database table-level deduplication
+        # PHASE 4.5: Database table-level deduplication
         db_info = {"new": [], "skipped": []}
         new_db_uri_list = []
 
@@ -197,12 +239,10 @@ async def run_ingestion_pipeline(
 
             for db_uri in db_uri_list:
                 try:
-                    # Get available tables from database
                     from nisaa.utils.sql_database import get_database_tables
 
                     available_tables = get_database_tables(db_uri)
 
-                    # Filter new vs already-processed tables
                     new_tables, skipped_tables = DBDeduplicator.filter_new_tables(
                         db_uri=db_uri,
                         available_tables=available_tables,
@@ -213,7 +253,6 @@ async def run_ingestion_pipeline(
                     all_new_tables.extend(new_tables)
                     all_skipped_tables.extend(skipped_tables)
 
-                    # If any new tables exist for this DB, add it to processing list
                     if new_tables:
                         new_db_uri_list.append(
                             {
@@ -279,10 +318,33 @@ async def run_ingestion_pipeline(
             db_uris=new_db_uri_list,
             website_urls=website_url_list,
             proxies=None,
+            db_pool=db_pool,   
+            job_id=job_id  
         )
 
-        stats = await asyncio.to_thread(pipeline.run, job_manager, company_name)
+        try:
+            stats = await asyncio.to_thread(pipeline.run, job_manager, company_name)
+        except asyncio.CancelledError:
+            logger.warning(f"[{job_id}] ⚠️ Pipeline cancelled - checkpoints saved")
+            
+            if pipeline:
+                pipeline.cancellation_event.set()
+                logger.info(f"[{job_id}] Cancellation signal sent to pipeline thread")
+            
+            # Give thread 5 seconds to finish current operation
+            await asyncio.sleep(5)
 
+            # Update job status to FAILED with cancellation message
+            job_manager.update_job_status(
+                job_id, 
+                JobStatus.FAILED, 
+                error_message="Interrupted by shutdown. Checkpoints saved. Rerun to resume."
+            )
+            
+            # Re-raise to properly cancel the task
+            raise
+
+        # Rest of the processing (marking files as processed)
         logger.info(f"[{job_id}] PHASE 6: MARKING FILES AS PROCESSED")
 
         vectors_per_item = stats["vectors_upserted"] // max(
@@ -341,7 +403,6 @@ async def run_ingestion_pipeline(
                 except Exception as e:
                     logger.error(f"[{job_id}] Failed to mark website: {e}")
 
-        # NEW: Mark processed tables
         if db_info["new"]:
             logger.info(f"[{job_id}] PHASE 9: MARKING DATABASE TABLES AS PROCESSED")
 
@@ -382,20 +443,48 @@ async def run_ingestion_pipeline(
             f"{stats['vectors_upserted']} vectors"
         )
 
+    except asyncio.CancelledError:
+        logger.info(f"[{job_id}] Task cancelled gracefully")
+        
+        if checkpoint_manager:
+            checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
+            if checkpoints:
+                logger.info(
+                    f"[{job_id}] 💾 Saved checkpoints: {list(checkpoints.keys())}. "
+                    f"Rerun ingestion to resume."
+                )
+        
+        # Don't suppress the CancelledError - let it propagate
+        raise
+
     except Exception as e:
         error_msg = f"Ingestion failed: {str(e)}"
-        logger.error(f"[{job_id}] : {error_msg}", exc_info=True)
+        logger.error(f"[{job_id}]: {error_msg}", exc_info=True)
+
+        if checkpoint_manager:
+            checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
+            
+            if checkpoints:
+                logger.info(
+                    f"[{job_id}] 💾 Saved checkpoints: {list(checkpoints.keys())}. "
+                    f"Rerun to resume."
+                )
 
         job_manager.update_job_status(job_id, JobStatus.FAILED, error_message=error_msg)
 
-# API Endpoints for Data Ingestion
+
 @router.post("/ingest")
 async def create_ingestion_job(
     request: Request,
     background_tasks: BackgroundTasks
 ):
     """
-    Create ingestion job and return immediately with job_id
+    Create or resume ingestion job
+    
+    Key improvements:
+    1. Automatically detects resumable jobs
+    2. Validates checkpoints exist before resuming
+    3. Clear messaging about resume status
     """
     data = await request.json()
 
@@ -405,6 +494,9 @@ async def create_ingestion_job(
     s3_file_keys = data.get("s3_file_keys", [])
     zoho_cred_encrypted = data.get("zoho_cred_encrypted")
     zoho_region = data.get("zoho_region", "IN")
+    
+    # NEW: Allow explicit resume control
+    force_new_job = data.get("force_new_job", False)  # Set to True to skip resume
 
     if not company_name:
         raise HTTPException(status_code=400, detail="'company_name' is required")
@@ -415,6 +507,7 @@ async def create_ingestion_job(
     company_directory = os.path.join(base_directory, company_name)
     os.makedirs(company_directory, exist_ok=True)
 
+    # Parse inputs (same as before)
     s3_file_keys_list = []
     if s3_file_keys:
         if isinstance(s3_file_keys, list):
@@ -456,29 +549,58 @@ async def create_ingestion_job(
                 website_url_list = [url.strip() for url in website_urls.split(",") if url.strip()]
 
     job_manager = JobManager(get_pool())
-    job_id = job_manager.create_job(
-        company_name=company_name,
-        metadata={
-            "s3_files": len(s3_file_keys_list),
-            "databases": len(db_uri_list),
-            "websites": len(website_url_list),
-            "has_zoho": bool(zoho_cred_encrypted)
-        }
-    )
+    
+    # ============================================================
+    # SMART JOB RESUME LOGIC
+    # ============================================================
+    job_id = None
+    resumed = False
+    
+    if not force_new_job:
+        job_id = should_resume_job(job_manager, company_name)
+        if job_id:
+            resumed = True
+            logger.info(f"Resuming interrupted job {job_id} for {company_name}")
+        else:
+            logger.info(f"No resumable job found, creating new job for {company_name}")
+    else:
+        logger.info(f"force_new_job=True, creating new job for {company_name}")
+    
+    # Create new job if no resumable job found
+    if not job_id:
+        job_id = job_manager.create_job(
+            company_name=company_name,
+            metadata={
+                "s3_files": len(s3_file_keys_list),
+                "databases": len(db_uri_list),
+                "websites": len(website_url_list),
+                "has_zoho": bool(zoho_cred_encrypted)
+            }
+        )
+        logger.info(f"Created new job {job_id} for {company_name}")
 
-    background_tasks.add_task(
-        run_ingestion_pipeline,
-        job_id=job_id,
-        company_name=company_name,
-        company_directory=company_directory,
-        s3_file_keys_list=s3_file_keys_list,
-        zoho_cred_encrypted=zoho_cred_encrypted,
-        zoho_region=zoho_region,
-        db_uri_list=db_uri_list,
-        website_url_list=website_url_list
+    # Create task and track it
+    task = asyncio.create_task(
+        run_ingestion_pipeline(
+            job_id=job_id,
+            company_name=company_name,
+            company_directory=company_directory,
+            s3_file_keys_list=s3_file_keys_list,
+            zoho_cred_encrypted=zoho_cred_encrypted,
+            zoho_region=zoho_region,
+            db_uri_list=db_uri_list,
+            website_url_list=website_url_list
+        )
     )
-
-    logger.info(f"Created job {job_id} for {company_name}")
+    
+    # Track the background task
+    try:
+        from main import background_tasks_running
+        background_tasks_running.add(task)
+        # Remove from tracking when done
+        task.add_done_callback(lambda t: background_tasks_running.discard(t))
+    except ImportError:
+        logger.warning("Could not import background_tasks_running from main")
 
     return JSONResponse(
         status_code=202,
@@ -486,8 +608,13 @@ async def create_ingestion_job(
             "status": "accepted",
             "job_id": job_id,
             "company_name": company_name,
-            "message": f"Ingestion job created. Check status at /data-ingestion/jobs/{job_id}/status",
-            "check_status_url": f"/data-ingestion/jobs/{job_id}/status"
+            "resumed": resumed,
+            "message": (
+                f"Ingestion job {'resumed from checkpoint' if resumed else 'created'}. "
+                f"Check status at /data-ingestion/jobs/{job_id}/status"
+            ),
+            "check_status_url": f"/data-ingestion/jobs/{job_id}/status",
+            "checkpoints_url": f"/data-ingestion/jobs/{job_id}/checkpoints"
         }
     )
 
@@ -679,3 +806,74 @@ async def get_company_zoho_reports(company_name: str):
     finally:
         if conn:
             pool.putconn(conn)
+
+
+# ADD NEW ENDPOINT to check checkpoint status:
+@router.get("/jobs/{job_id}/checkpoints")
+async def get_job_checkpoints(job_id: str):
+    """Get checkpoint status for a job"""
+    from nisaa.services.checkpoint_manager import CheckpointManager
+    
+    checkpoint_manager = CheckpointManager(get_pool())
+    checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
+    
+    if not checkpoints:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "job_id": job_id,
+                "has_checkpoints": False,
+                "message": "No checkpoints found (job completed or not started)"
+            }
+        )
+    
+    # Calculate progress
+    progress_info = {}
+    for phase, data in checkpoints.items():
+        if 'last_batch_index' in data and 'total_batches' in data:
+            progress_pct = (data['last_batch_index'] + 1) / data['total_batches'] * 100
+            progress_info[phase] = {
+                "last_batch": data['last_batch_index'] + 1,
+                "total_batches": data['total_batches'],
+                "progress_percentage": round(progress_pct, 2),
+                "last_updated": data.get('last_updated'),
+                "error": data.get('error')
+            }
+    
+    return JSONResponse(
+        status_code=200,
+        content={
+            "job_id": job_id,
+            "has_checkpoints": True,
+            "can_resume": True,
+            "checkpoints": progress_info,
+            "message": "Job can be resumed by rerunning with same job_id"
+        }
+    )
+
+
+# ADD NEW ENDPOINT to manually clear checkpoints:
+@router.delete("/jobs/{job_id}/checkpoints")
+async def clear_job_checkpoints(job_id: str):
+    """Manually clear checkpoints for a job"""
+    from nisaa.services.checkpoint_manager import CheckpointManager, ProcessedItemTracker
+    
+    try:
+        checkpoint_manager = CheckpointManager(get_pool())
+        item_tracker = ProcessedItemTracker(get_pool())
+        
+        # Clear all checkpoints and tracked items
+        checkpoint_manager.clear_checkpoint(job_id)
+        item_tracker.clear_items(job_id)
+        
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "job_id": job_id,
+                "message": "All checkpoints and tracked items cleared"
+            }
+        )
+    except Exception as e:
+        logger.error(f"Failed to clear checkpoints: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

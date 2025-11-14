@@ -1,11 +1,11 @@
 """
-Vector store service for Pinecone operations
+Vector store service for Pinecone operations with checkpoint/recovery support
 """
 import os
 import time
 import uuid
 import hashlib
-from typing import List, Dict, Tuple, Any
+from typing import List, Dict, Tuple, Any, Optional
 from pinecone import Pinecone as LangchainPinecone
 from langchain_openai import OpenAIEmbeddings
 from src.nisaa.config.logger import logger
@@ -13,7 +13,7 @@ from nisaa.utils.json_processor import extract_all_ids
 
 
 class VectorStoreService:
-    """Handles all Pinecone vector store operations"""
+    """Handles all Pinecone vector store operations with checkpointing"""
     
     def __init__(self, api_key: str = None, index_name: str = None):
         self.api_key = api_key or os.getenv('PINECONE_API_KEY')
@@ -29,18 +29,7 @@ class VectorStoreService:
         metadatas: List[Dict],
         namespace: str
     ) -> Tuple[List[str], List[List[float]], List[Dict]]:
-        """
-        Prepare document vectors for upsert
-        
-        Args:
-            texts: List of text strings
-            embeddings: List of embedding vectors
-            metadatas: List of metadata dicts
-            namespace: Pinecone namespace
-            
-        Returns:
-            Tuple of (ids, vectors, processed_metadatas)
-        """
+        """Prepare document vectors for upsert"""
         ids = [str(uuid.uuid4()) for _ in range(len(texts))]
         
         processed_metadatas = []
@@ -69,19 +58,7 @@ class VectorStoreService:
         entities: List[Tuple[str, Dict]],
         namespace: str
     ) -> List[Dict]:
-        """
-        Prepare JSON chunk vectors with entity metadata
-        
-        Args:
-            chunks: List of text chunks
-            embeddings: List of embedding vectors
-            entities: List of (entity_id, entity_data) tuples
-            namespace: Pinecone namespace
-            
-        Returns:
-            List of vector dictionaries ready for upsert
-        """
-        
+        """Prepare JSON chunk vectors with entity metadata"""
         vectors = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
             vector_id = hashlib.md5(chunk.encode()).hexdigest()[:16]
@@ -127,40 +104,65 @@ class VectorStoreService:
         logger.info(f"Prepared {len(vectors)} JSON vectors for namespace '{namespace}'")
         return vectors
     
+    def _compute_batch_hash(self, batch_ids: List[str]) -> str:
+        """Compute hash for a batch to track processed batches"""
+        combined = "".join(sorted(batch_ids))
+        return hashlib.md5(combined.encode('utf-8')).hexdigest()
+    
+    """
+    Replace upsert_vectors and upsert_json_vectors in vector_store_service.py
+    SIMPLIFIED: Only batch index tracking
+    """
+
     def upsert_vectors(
-        self,
-        ids: List[str],
-        vectors: List[List[float]],
-        metadatas: List[Dict],
-        namespace: str,
-        batch_size: int = None
+    self,
+    ids: List[str],
+    vectors: List[List[float]],
+    metadatas: List[Dict],
+    namespace: str,
+    batch_size: int = None,
+    checkpoint_manager = None,
+    job_id: str = None,
+    cancellation_event = None  
+
     ) -> int:
-        """
-        Upsert vectors to Pinecone in batches
-        
-        Args:
-            ids: List of vector IDs
-            vectors: List of embedding vectors
-            metadatas: List of metadata dicts
-            namespace: Pinecone namespace
-            batch_size: Batch size for upserts
-            
-        Returns:
-            Total number of vectors upserted
-        """
+        """Upsert vectors with proper checkpoint recovery"""
         batch_size = batch_size or int(os.getenv('PINECONE_BATCH_SIZE', '100'))
+        phase = 'upserting_vectors'
+        
+        start_batch_idx = 0
         total_upserted = 0
+        
+        # Load checkpoint
+        if checkpoint_manager and job_id:
+            checkpoint = checkpoint_manager.load_checkpoint(job_id, phase)
+            if checkpoint:
+                start_batch_idx = checkpoint.get('last_batch_index', -1) + 1
+                total_upserted = checkpoint.get('total_upserted', 0)
+                logger.info(
+                    f"🔄 Resuming upsert from batch {start_batch_idx} "
+                    f"({total_upserted} vectors already upserted)"
+                )
+        
         upsert_batches = (len(vectors) - 1) // batch_size + 1
         
         logger.info(f"Upserting {len(vectors)} vectors to namespace '{namespace}'...")
         
-        for i in range(0, len(vectors), batch_size):
+        for i in range(start_batch_idx * batch_size, len(vectors), batch_size):
+
+            if cancellation_event and cancellation_event.is_set():
+                logger.warning(
+                    f"⚠️ Upsert cancelled at batch {i // batch_size + 1}/{upsert_batches}. "
+                    f"Progress saved in checkpoint."
+                )
+                return total_upserted 
+            
             batch_ids = ids[i:i + batch_size]
             batch_vectors = vectors[i:i + batch_size]
             batch_metadatas = metadatas[i:i + batch_size]
+            batch_num = i // batch_size + 1
             
             vectors_to_upsert = list(zip(batch_ids, batch_vectors, batch_metadatas))
-            batch_num = i // batch_size + 1
             
             try:
                 upsert_response = self.index.upsert(
@@ -171,53 +173,135 @@ class VectorStoreService:
                 upserted_count = upsert_response.get('upserted_count', 0)
                 total_upserted += upserted_count
                 
-                logger.info(f"Batch {batch_num}/{upsert_batches}: {upserted_count} vectors")
+                # Save checkpoint
+                if checkpoint_manager and job_id:
+                    checkpoint_manager.save_checkpoint(
+                        job_id=job_id,
+                        company_name=checkpoint_manager.company_name,
+                        phase=phase,
+                        checkpoint_data={
+                            'last_batch_index': batch_num - 1,
+                            'total_batches': upsert_batches,
+                            'total_upserted': total_upserted,
+                            'namespace': namespace,
+                            'timestamp': time.time()
+                        }
+                    )
+                
+                logger.info(f"✅ Batch {batch_num}/{upsert_batches}: {upserted_count} vectors")
                 time.sleep(0.3)
                 
             except Exception as e:
-                logger.error(f"Batch {batch_num} failed: {e}")
+                logger.error(f"❌ Batch {batch_num} failed: {e}")
+                
+                if checkpoint_manager and job_id:
+                    checkpoint_manager.save_checkpoint(
+                        job_id=job_id,
+                        company_name=checkpoint_manager.company_name,
+                        phase=phase,
+                        checkpoint_data={
+                            'last_batch_index': batch_num - 2,
+                            'total_batches': upsert_batches,
+                            'total_upserted': total_upserted,
+                            'namespace': namespace,
+                            'error': str(e),
+                            'timestamp': time.time()
+                        }
+                    )
                 raise
         
-        logger.info(f"Total upserted: {total_upserted}/{len(vectors)}")
+        # Clear checkpoint on success
+        if checkpoint_manager and job_id:
+            checkpoint_manager.clear_checkpoint(job_id, phase)
+        
+        logger.info(f"✅ Total upserted: {total_upserted}/{len(vectors)}")
         return total_upserted
-    
+
+
     def upsert_json_vectors(
         self,
         vectors: List[Dict],
         namespace: str,
-        batch_size: int = 100
+        batch_size: int = 100,
+        checkpoint_manager = None,
+        item_tracker = None,
+        job_id: str = None
     ) -> int:
         """
-        Upsert JSON vectors to Pinecone
-        
-        Args:
-            vectors: List of vector dictionaries
-            namespace: Pinecone namespace
-            batch_size: Batch size for upserts
-            
-        Returns:
-            Total number of vectors upserted
+        Upsert JSON vectors to Pinecone with checkpoint/recovery support
+        SIMPLIFIED: Only batch tracking
         """
+        phase = 'upserting_json_vectors'
+        
+        # Check for existing checkpoint
+        start_batch_idx = 0
         total_upserted = 0
+        
+        if checkpoint_manager and job_id:
+            checkpoint = checkpoint_manager.load_checkpoint(job_id, phase)
+            if checkpoint:
+                start_batch_idx = checkpoint.get('last_batch_index', -1) + 1
+                total_upserted = checkpoint.get('total_upserted', 0)
+                logger.info(
+                    f"🔄 Resuming JSON upsert from batch {start_batch_idx} "
+                    f"({total_upserted} vectors already upserted)"
+                )
+        
         upsert_batches = (len(vectors) - 1) // batch_size + 1
         
         logger.info(f"Upserting {len(vectors)} JSON vectors to namespace '{namespace}'...")
         
-        for i in range(0, len(vectors), batch_size):
+        for i in range(start_batch_idx * batch_size, len(vectors), batch_size):
             batch = vectors[i:i+batch_size]
             batch_num = i // batch_size + 1
             
             try:
                 self.index.upsert(vectors=batch, namespace=namespace)
                 total_upserted += len(batch)
-                logger.info(f"Batch {batch_num}/{upsert_batches}: {len(batch)} vectors")
+                
+                # Save checkpoint
+                if checkpoint_manager and job_id:
+                    checkpoint_manager.save_checkpoint(
+                        job_id=job_id,
+                        company_name=checkpoint_manager.company_name,
+                        phase=phase,
+                        checkpoint_data={
+                            'last_batch_index': batch_num - 1,
+                            'total_batches': upsert_batches,
+                            'total_upserted': total_upserted,
+                            'namespace': namespace,
+                            'timestamp': time.time()
+                        }
+                    )
+                
+                logger.info(f"✓ JSON Batch {batch_num}/{upsert_batches}: {len(batch)} vectors")
+                
             except Exception as e:
-                logger.error(f"Batch {batch_num} failed: {e}")
+                logger.error(f"❌ JSON Batch {batch_num} failed: {e}")
+                
+                # Save checkpoint on error
+                if checkpoint_manager and job_id:
+                    checkpoint_manager.save_checkpoint(
+                        job_id=job_id,
+                        company_name=checkpoint_manager.company_name,
+                        phase=phase,
+                        checkpoint_data={
+                            'last_batch_index': batch_num - 2,
+                            'total_batches': upsert_batches,
+                            'total_upserted': total_upserted,
+                            'namespace': namespace,
+                            'error': str(e),
+                            'timestamp': time.time()
+                        }
+                    )
                 raise
         
-        logger.info(f"Total JSON vectors upserted: {total_upserted}")
+        # Clear checkpoint on success
+        if checkpoint_manager and job_id:
+            checkpoint_manager.clear_checkpoint(job_id, phase)
+        
+        logger.info(f"✅ Total JSON vectors upserted: {total_upserted}")
         return total_upserted
-    
     def verify_upsert(self, namespace: str, expected_count: int):
         """Verify vectors were successfully uploaded"""
         time.sleep(2)
@@ -230,7 +314,7 @@ class VectorStoreService:
             if namespace_count < expected_count:
                 logger.warning(f"Expected {expected_count}, found {namespace_count}")
             else:
-                logger.info(f"All {expected_count} vectors stored correctly")
+                logger.info(f"✅ All {expected_count} vectors stored correctly")
         except Exception as e:
             logger.warning(f"Could not verify: {e}")
     
@@ -239,16 +323,7 @@ class VectorStoreService:
         namespace: str,
         embeddings: OpenAIEmbeddings
     ) -> LangchainPinecone:
-        """
-        Create LangChain PineconeVectorStore wrapper
-        
-        Args:
-            namespace: Pinecone namespace
-            embeddings: OpenAI embeddings instance
-            
-        Returns:
-            LangChain Pinecone vectorstore
-        """
+        """Create LangChain PineconeVectorStore wrapper"""
         return LangchainPinecone(
             index=self.index,
             embedding=embeddings,
