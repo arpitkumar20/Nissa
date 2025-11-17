@@ -32,7 +32,6 @@ def should_resume_job(job_manager, company_name: str) -> Optional[str]:
     if existing_job:
         job_id = existing_job['job_id']
         
-        # Check if this job actually has checkpoints
         from nisaa.services.checkpoint_manager import CheckpointManager
         checkpoint_manager = CheckpointManager(job_manager.pool)
         checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
@@ -49,7 +48,6 @@ def should_resume_job(job_manager, company_name: str) -> Optional[str]:
     
     return None
 
-# Decode base64 encoded Zoho credentials from the request payload
 def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
     """Decode base64 encoded Zoho credentials"""
     try:
@@ -66,7 +64,6 @@ def decode_zoho_credentials(base64_str: str) -> Dict[str, str]:
         logger.error(f"Failed to decode credentials: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid credentials: {str(e)}")
 
-# Save company namespace to JSON file
 def save_name(namespace: str, folder_path: str = "web_info", filename: str = "web_info.json"):
     """Save namespace to JSON file"""
     os.makedirs(folder_path, exist_ok=True)
@@ -86,10 +83,8 @@ def save_name(namespace: str, folder_path: str = "web_info", filename: str = "we
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
 
-    print(f"Namespace '{namespace}' saved to {file_path} successfully!")
     return namespace
 
-# Sanitize company name to prevent path traversal attacks
 def sanitize_company_name(company_name: str) -> str:
     """
     Sanitize company name to prevent path traversal attacks
@@ -100,20 +95,17 @@ def sanitize_company_name(company_name: str) -> str:
     if not company_name:
         raise HTTPException(status_code=400, detail="Company name is required")
 
-    # Only allow alphanumeric, underscore, hyphen
     if not re.match(r"^[a-zA-Z0-9_-]+$", company_name):
         raise HTTPException(
             status_code=400,
             detail="Company name can only contain letters, numbers, hyphens, and underscores",
         )
 
-    # Prevent overly long names
     if len(company_name) > 100:
         raise HTTPException(
             status_code=400, detail="Company name too long (max 100 chars)"
         )
 
-    # Additional check: resolve path and ensure it's within base_directory
     base_dir = Path("data").resolve()
     company_dir = (base_dir / company_name).resolve()
 
@@ -121,8 +113,6 @@ def sanitize_company_name(company_name: str) -> str:
         raise HTTPException(status_code=400, detail="Invalid company name")
 
     return company_name
-
-# REPLACE the run_ingestion_pipeline function in ingestion_router.py with this:
 
 async def run_ingestion_pipeline(
     job_id: str,
@@ -134,182 +124,196 @@ async def run_ingestion_pipeline(
     db_uri_list: List[str],
     website_url_list: List[str],
 ):
-    """Background task to run ingestion pipeline with proper shutdown handling"""
+    """Background task with smart resume - skips data loading if checkpoint exists"""
     job_manager = JobManager(get_pool())
     db_pool = get_pool()
     checkpoint_manager = None
     pipeline = None
 
     try:
-        # Initialize checkpoint manager
         checkpoint_manager = CheckpointManager(db_pool)
         checkpoint_manager.company_name = company_name
         
+        checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
+        is_resuming = bool(checkpoints)
+        
+        has_pipeline_state = 'pipeline_state' in checkpoints if checkpoints else False
+        
+        if is_resuming:
+            logger.info(
+                f"[{job_id}] Resuming from checkpoint "
+                f"(found {len(checkpoints)} saved phases: {list(checkpoints.keys())})"
+            )
+            
+            if has_pipeline_state:
+                logger.info(f"[{job_id}] Found pipeline state - will resume from stored data")
+            
+            logger.info(f"[{job_id}] Skipping data loading phases")
+        else:
+            logger.info(f"[{job_id}] Starting new ingestion for {company_name}")
+        
         job_manager.update_job_status(job_id, JobStatus.RUNNING)
-        logger.info(f"[{job_id}] Starting ingestion for {company_name}")
 
         zoho_files = []
         all_file_paths = []
-
-        # PHASE 1: Zoho data extraction
-        if zoho_cred_encrypted and zoho_cred_encrypted.strip():
-            logger.info(f"[{job_id}] PHASE 1: ZOHO DATA EXTRACTION")
-
-            try:
-                decoded_creds = decode_zoho_credentials(zoho_cred_encrypted)
-                zoho_client_id = decoded_creds.get("zoho_client_id")
-                zoho_client_secret = decoded_creds.get("zoho_client_secret")
-                zoho_refresh_token = decoded_creds.get("zoho_refresh_token")
-
-                if not all([zoho_client_id, zoho_client_secret, zoho_refresh_token]):
-                    raise ValueError("Incomplete Zoho credentials")
-
-                zoho_exporter = ZohoCreatorExporter(
-                    client_id=zoho_client_id,
-                    client_secret=zoho_client_secret,
-                    refresh_token=zoho_refresh_token,
-                    output_dir=company_directory,
-                    zoho_region=zoho_region,
-                )
-
-                zoho_stats = zoho_exporter.export_all_data()
-                zoho_files = zoho_stats["json_file_paths"]
-
-                logger.info(f"[{job_id}] Zoho: {len(zoho_files)} files exported")
-
-            except Exception as zoho_error:
-                logger.error(f"[{job_id}] Zoho extraction failed: {zoho_error}")
-                raise
-
-        # PHASE 2: S3 file download
-        if len(s3_file_keys_list) > 0:
-            logger.info(f"[{job_id}] PHASE 2: S3 FILE DOWNLOAD")
-
-            downloaded_s3_files = await asyncio.to_thread(
-                download_all_files_from_s3,
-                file_list=s3_file_keys_list,
-                company_name=company_name,
-            )
-
-            all_file_paths.extend(downloaded_s3_files)
-            logger.info(
-                f"[{job_id}] ✓ Downloaded {len(downloaded_s3_files)} files from S3"
-            )
-
-        # PHASE 3: Zoho file deduplication
         zoho_info = {"new": [], "skipped": []}
-        if zoho_files:
-            logger.info(f"[{job_id}] PHASE 3: ZOHO FILE DEDUPLICATION")
-
-            new_zoho_reports, skipped_zoho_reports = (
-                ZohoDeduplicator.filter_new_zoho_reports(
-                    zoho_json_files=zoho_files,
-                    job_manager=job_manager,
-                    company_name=company_name,
-                )
-            )
-
-            zoho_info = {"new": new_zoho_reports, "skipped": skipped_zoho_reports}
-
-            new_zoho_file_paths = [report["file_path"] for report in new_zoho_reports]
-            all_file_paths.extend(new_zoho_file_paths)
-            logger.info(
-                f"[{job_id}] Zoho: {len(new_zoho_reports)} new, "
-                f"{len(skipped_zoho_reports)} skipped"
-            )
-
-        # PHASE 4: Regular file deduplication
-        logger.info(f"[{job_id}] PHASE 4: REGULAR FILE DEDUPLICATION")
-
-        new_files, skipped_files = FileDeduplicator.filter_new_files(
-            file_paths=all_file_paths,
-            job_manager=job_manager,
-            company_name=company_name,
-        )
-
-        # PHASE 4.5: Database table-level deduplication
         db_info = {"new": [], "skipped": []}
         new_db_uri_list = []
-
-        if db_uri_list:
-            logger.info(f"[{job_id}] PHASE 4.5: DATABASE TABLE-LEVEL DEDUPLICATION")
-
-            all_new_tables = []
-            all_skipped_tables = []
-
-            for db_uri in db_uri_list:
+        new_files = []
+        skipped_files = []
+        
+        if not is_resuming:
+            if zoho_cred_encrypted and zoho_cred_encrypted.strip():
+                logger.info(f"[{job_id}] Phase 1: Zoho data extraction")
                 try:
-                    from nisaa.utils.sql_database import get_database_tables
+                    decoded_creds = decode_zoho_credentials(zoho_cred_encrypted)
+                    zoho_client_id = decoded_creds.get("zoho_client_id")
+                    zoho_client_secret = decoded_creds.get("zoho_client_secret")
+                    zoho_refresh_token = decoded_creds.get("zoho_refresh_token")
 
-                    available_tables = get_database_tables(db_uri)
+                    if not all([zoho_client_id, zoho_client_secret, zoho_refresh_token]):
+                        raise ValueError("Incomplete Zoho credentials")
 
-                    new_tables, skipped_tables = DBDeduplicator.filter_new_tables(
-                        db_uri=db_uri,
-                        available_tables=available_tables,
+                    zoho_exporter = ZohoCreatorExporter(
+                        client_id=zoho_client_id,
+                        client_secret=zoho_client_secret,
+                        refresh_token=zoho_refresh_token,
+                        output_dir=company_directory,
+                        zoho_region=zoho_region,
+                    )
+
+                    zoho_stats = zoho_exporter.export_all_data()
+                    zoho_files = zoho_stats["json_file_paths"]
+                    logger.info(f"[{job_id}] Zoho: {len(zoho_files)} files exported")
+                except Exception as zoho_error:
+                    logger.error(f"[{job_id}] Zoho extraction failed: {zoho_error}")
+                    raise
+
+            if len(s3_file_keys_list) > 0:
+                logger.info(f"[{job_id}] Phase 2: S3 file download")
+                downloaded_s3_files = await asyncio.to_thread(
+                    download_all_files_from_s3,
+                    file_list=s3_file_keys_list,
+                    company_name=company_name,
+                )
+                all_file_paths.extend(downloaded_s3_files)
+                logger.info(f"[{job_id}] Downloaded {len(downloaded_s3_files)} files from S3")
+
+            if zoho_files:
+                logger.info(f"[{job_id}] Phase 3: Zoho file deduplication")
+                new_zoho_reports, skipped_zoho_reports = (
+                    ZohoDeduplicator.filter_new_zoho_reports(
+                        zoho_json_files=zoho_files,
                         job_manager=job_manager,
                         company_name=company_name,
                     )
+                )
+                zoho_info = {"new": new_zoho_reports, "skipped": skipped_zoho_reports}
+                new_zoho_file_paths = [report["file_path"] for report in new_zoho_reports]
+                all_file_paths.extend(new_zoho_file_paths)
+                logger.info(
+                    f"[{job_id}] Zoho: {len(new_zoho_reports)} new, "
+                    f"{len(skipped_zoho_reports)} skipped"
+                )
 
-                    all_new_tables.extend(new_tables)
-                    all_skipped_tables.extend(skipped_tables)
+            logger.info(f"[{job_id}] Phase 4: Regular file deduplication")
+            new_files, skipped_files = FileDeduplicator.filter_new_files(
+                file_paths=all_file_paths,
+                job_manager=job_manager,
+                company_name=company_name,
+            )
 
-                    if new_tables:
-                        new_db_uri_list.append(
-                            {
-                                "db_uri": db_uri,
-                                "new_tables": [t["table_name"] for t in new_tables],
-                            }
+            if db_uri_list:
+                logger.info(f"[{job_id}] Phase 4.5: Database table-level deduplication")
+                all_new_tables = []
+                all_skipped_tables = []
+
+                for db_uri in db_uri_list:
+                    try:
+                        from nisaa.utils.sql_database import get_database_tables
+                        available_tables = get_database_tables(db_uri)
+
+                        new_tables, skipped_tables = DBDeduplicator.filter_new_tables(
+                            db_uri=db_uri,
+                            available_tables=available_tables,
+                            job_manager=job_manager,
+                            company_name=company_name,
                         )
 
-                except Exception as e:
-                    logger.error(f"[{job_id}] Failed to process DB {db_uri}: {e}")
+                        all_new_tables.extend(new_tables)
+                        all_skipped_tables.extend(skipped_tables)
 
-            db_info = {"new": all_new_tables, "skipped": all_skipped_tables}
+                        if new_tables:
+                            new_db_uri_list.append(
+                                {
+                                    "db_uri": db_uri,
+                                    "new_tables": [t["table_name"] for t in new_tables],
+                                }
+                            )
+                    except Exception as e:
+                        logger.error(f"[{job_id}] Failed to process DB {db_uri}: {e}")
+
+                db_info = {"new": all_new_tables, "skipped": all_skipped_tables}
+                logger.info(
+                    f"[{job_id}] Tables: {len(all_new_tables)} new, "
+                    f"{len(all_skipped_tables)} skipped"
+                )
+
+            total_items = (
+                len(new_files)
+                + len(skipped_files)
+                + len(zoho_info["skipped"])
+                + len(db_info["skipped"])
+            )
+
+            job_manager.update_job_status(
+                job_id,
+                JobStatus.RUNNING,
+                total_files=total_items,
+                skipped_files=len(skipped_files)
+                + len(zoho_info["skipped"])
+                + len(db_info["skipped"]),
+            )
 
             logger.info(
-                f"[{job_id}] Tables: {len(all_new_tables)} new, "
-                f"{len(all_skipped_tables)} skipped"
+                f"[{job_id}] Summary: {len(new_files)} new files, "
+                f"{len(skipped_files)} skipped files, "
+                f"{len(zoho_info['skipped'])} skipped Zoho, "
+                f"{len(db_info['new'])} new tables, "
+                f"{len(db_info['skipped'])} skipped tables"
             )
 
-        total_items = (
-            len(new_files)
-            + len(skipped_files)
-            + len(zoho_info["skipped"])
-            + len(db_info["skipped"])
-        )
+            if len(new_files) == 0 and not new_db_uri_list and not website_url_list:
+                logger.info(f"[{job_id}] No new content to process")
+                job_manager.update_job_status(
+                    job_id, JobStatus.COMPLETED, processed_files=0, total_vectors=0
+                )
+                
+                try:
+                    import shutil
+                    if os.path.exists(company_directory):
+                        shutil.rmtree(company_directory)
+                        logger.info(f"[{job_id}] Cleaned up data directory: {company_directory}")
+                except Exception as e:
+                    logger.error(f"[{job_id}] Failed to cleanup data directory: {e}")
+                
+                return
+        else:
+            logger.info(f"[{job_id}] Using checkpoint data, skipping file discovery")
+            new_files = []
+            new_db_uri_list = []
 
-        job_manager.update_job_status(
-            job_id,
-            JobStatus.RUNNING,
-            total_files=total_items,
-            skipped_files=len(skipped_files)
-            + len(zoho_info["skipped"])
-            + len(db_info["skipped"]),
-        )
-
-        logger.info(
-            f"[{job_id}] Summary: {len(new_files)} new files, "
-            f"{len(skipped_files)} skipped files, "
-            f"{len(zoho_info['skipped'])} skipped Zoho, "
-            f"{len(db_info['new'])} new tables, "
-            f"{len(db_info['skipped'])} skipped tables"
-        )
-
-        if len(new_files) == 0 and not new_db_uri_list and not website_url_list:
-            logger.info(f"[{job_id}] No new content to process")
-            job_manager.update_job_status(
-                job_id, JobStatus.COMPLETED, processed_files=0, total_vectors=0
-            )
-            return
-
-        logger.info(f"[{job_id}] PHASE 5: DATA INGESTION PIPELINE")
+        logger.info(f"[{job_id}] Phase 5: Data ingestion pipeline")
 
         new_file_paths = [file_info["file_path"] for file_info in new_files]
 
-        logger.info(
-            f"[{job_id}] Processing {len(new_file_paths)} new files and "
-            f"{len(db_info['new'])} new tables"
-        )
+        if not is_resuming:
+            logger.info(
+                f"[{job_id}] Processing {len(new_file_paths)} new files and "
+                f"{len(db_info['new'])} new tables"
+            )
+        else:
+            logger.info(f"[{job_id}] Resuming pipeline from checkpoint")
 
         pipeline = DataIngestionPipeline(
             company_namespace=company_name,
@@ -318,130 +322,126 @@ async def run_ingestion_pipeline(
             db_uris=new_db_uri_list,
             website_urls=website_url_list,
             proxies=None,
-            db_pool=db_pool,   
-            job_id=job_id  
+            db_pool=db_pool,
+            job_id=job_id
         )
 
         try:
             stats = await asyncio.to_thread(pipeline.run, job_manager, company_name)
         except asyncio.CancelledError:
-            logger.warning(f"[{job_id}] ⚠️ Pipeline cancelled - checkpoints saved")
+            logger.warning(f"[{job_id}] Pipeline cancelled - checkpoints saved")
             
             if pipeline:
                 pipeline.cancellation_event.set()
                 logger.info(f"[{job_id}] Cancellation signal sent to pipeline thread")
             
-            # Give thread 5 seconds to finish current operation
             await asyncio.sleep(5)
 
-            # Update job status to FAILED with cancellation message
             job_manager.update_job_status(
                 job_id, 
-                JobStatus.FAILED, 
+                JobStatus.PENDING, 
                 error_message="Interrupted by shutdown. Checkpoints saved. Rerun to resume."
             )
-            
-            # Re-raise to properly cancel the task
             raise
 
-        # Rest of the processing (marking files as processed)
-        logger.info(f"[{job_id}] PHASE 6: MARKING FILES AS PROCESSED")
+        if not is_resuming:
+            logger.info(f"[{job_id}] Phase 6: Marking files as processed")
+            vectors_per_item = stats["vectors_upserted"] // max(
+                len(new_files) + len(db_info["new"]), 1
+            )
 
-        vectors_per_item = stats["vectors_upserted"] // max(
-            len(new_files) + len(db_info["new"]), 1
-        )
-
-        for file_info in new_files:
-            try:
-                job_manager.mark_file_processed(
-                    company_name=company_name,
-                    file_path=file_info["file_path"],
-                    file_hash=file_info["file_hash"],
-                    file_size=file_info["file_size"],
-                    file_type=file_info["file_type"],
-                    vector_count=vectors_per_item,
-                    job_id=job_id,
-                    metadata={"source": "ingestion_pipeline"},
-                )
-            except Exception as e:
-                logger.error(
-                    f"[{job_id}] Failed to mark file {file_info['file_path']}: {e}"
-                )
-
-        if zoho_info["new"]:
-            logger.info(f"[{job_id}] PHASE 7: MARKING ZOHO REPORTS AS PROCESSED")
-
-            for zoho_report in zoho_info["new"]:
+            for file_info in new_files:
                 try:
-                    job_manager.mark_zoho_report_processed(
+                    job_manager.mark_file_processed(
                         company_name=company_name,
-                        report_name=zoho_report["report_name"],
-                        content_hash=zoho_report["content_hash"],
-                        record_count=zoho_report["record_count"],
-                        vector_count=vectors_per_item * zoho_report["record_count"],
-                        job_id=job_id,
-                        app_name=zoho_report.get("app_name", "Unknown"),
-                        metadata={"source": "zoho_export"},
-                    )
-                except Exception as e:
-                    logger.error(f"[{job_id}] Failed to mark Zoho report: {e}")
-
-        if hasattr(pipeline, "website_info") and pipeline.website_info:
-            logger.info(f"[{job_id}] PHASE 8: MARKING WEBSITES AS PROCESSED")
-
-            for website_info in pipeline.website_info.get("new", []):
-                try:
-                    job_manager.mark_website_processed(
-                        company_name=company_name,
-                        website_url=website_info["url"],
-                        content_hash=website_info["content_hash"],
-                        page_count=website_info["page_count"],
-                        vector_count=vectors_per_item * website_info["page_count"],
-                        job_id=job_id,
-                        metadata={"source": "website_scraping"},
-                    )
-                except Exception as e:
-                    logger.error(f"[{job_id}] Failed to mark website: {e}")
-
-        if db_info["new"]:
-            logger.info(f"[{job_id}] PHASE 9: MARKING DATABASE TABLES AS PROCESSED")
-
-            for table_info in db_info["new"]:
-                try:
-                    job_manager.mark_db_table_processed(
-                        company_name=company_name,
-                        db_uri=table_info["db_uri"],
-                        db_hash=table_info["db_hash"],
-                        table_name=table_info["table_name"],
-                        table_hash=table_info["table_hash"],
-                        row_count=table_info["row_count"],
+                        file_path=file_info["file_path"],
+                        file_hash=file_info["file_hash"],
+                        file_size=file_info["file_size"],
+                        file_type=file_info["file_type"],
                         vector_count=vectors_per_item,
                         job_id=job_id,
-                        metadata={
-                            "source": "database_ingestion",
-                            "db_type": table_info["db_type"],
-                            "db_name": table_info.get("db_name", "unknown"),
-                        },
+                        metadata={"source": "ingestion_pipeline"},
                     )
                 except Exception as e:
-                    logger.error(
-                        f"[{job_id}] Failed to mark table {table_info['table_name']}: {e}"
-                    )
+                    logger.error(f"[{job_id}] Failed to mark file: {e}")
+
+            if zoho_info["new"]:
+                logger.info(f"[{job_id}] Phase 7: Marking Zoho reports as processed")
+                for zoho_report in zoho_info["new"]:
+                    try:
+                        job_manager.mark_zoho_report_processed(
+                            company_name=company_name,
+                            report_name=zoho_report["report_name"],
+                            content_hash=zoho_report["content_hash"],
+                            record_count=zoho_report["record_count"],
+                            vector_count=vectors_per_item * zoho_report["record_count"],
+                            job_id=job_id,
+                            app_name=zoho_report.get("app_name", "Unknown"),
+                            metadata={"source": "zoho_export"},
+                        )
+                    except Exception as e:
+                        logger.error(f"[{job_id}] Failed to mark Zoho report: {e}")
+
+            if hasattr(pipeline, "website_info") and pipeline.website_info:
+                logger.info(f"[{job_id}] Phase 8: Marking websites as processed")
+                for website_info in pipeline.website_info.get("new", []):
+                    try:
+                        job_manager.mark_website_processed(
+                            company_name=company_name,
+                            website_url=website_info["url"],
+                            content_hash=website_info["content_hash"],
+                            page_count=website_info["page_count"],
+                            vector_count=vectors_per_item * website_info["page_count"],
+                            job_id=job_id,
+                            metadata={"source": "website_scraping"},
+                        )
+                    except Exception as e:
+                        logger.error(f"[{job_id}] Failed to mark website: {e}")
+
+            if db_info["new"]:
+                logger.info(f"[{job_id}] Phase 9: Marking database tables as processed")
+                for table_info in db_info["new"]:
+                    try:
+                        job_manager.mark_db_table_processed(
+                            company_name=company_name,
+                            db_uri=table_info["db_uri"],
+                            db_hash=table_info["db_hash"],
+                            table_name=table_info["table_name"],
+                            table_hash=table_info["table_hash"],
+                            row_count=table_info["row_count"],
+                            vector_count=vectors_per_item,
+                            job_id=job_id,
+                            metadata={
+                                "source": "database_ingestion",
+                                "db_type": table_info["db_type"],
+                                "db_name": table_info.get("db_name", "unknown"),
+                            },
+                        )
+                    except Exception as e:
+                        logger.error(f"[{job_id}] Failed to mark table: {e}")
 
         save_name(namespace=company_name)
 
         job_manager.update_job_status(
             job_id,
             JobStatus.COMPLETED,
-            processed_files=len(new_files) + len(db_info["new"]),
+            processed_files=len(new_files) + len(db_info.get("new", [])),
             total_vectors=stats["vectors_upserted"],
         )
 
         logger.info(
-            f"[{job_id}] COMPLETED: {len(new_files)} files, "
-            f"{len(db_info['new'])} tables, "
+            f"[{job_id}] Completed: {len(new_files)} files, "
+            f"{len(db_info.get('new', []))} tables, "
             f"{stats['vectors_upserted']} vectors"
         )
+
+        try:
+            import shutil
+            if os.path.exists(company_directory):
+                shutil.rmtree(company_directory)
+                logger.info(f"[{job_id}] Cleaned up data directory: {company_directory}")
+        except Exception as e:
+            logger.error(f"[{job_id}] Failed to cleanup data directory: {e}")
 
     except asyncio.CancelledError:
         logger.info(f"[{job_id}] Task cancelled gracefully")
@@ -450,11 +450,9 @@ async def run_ingestion_pipeline(
             checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
             if checkpoints:
                 logger.info(
-                    f"[{job_id}] 💾 Saved checkpoints: {list(checkpoints.keys())}. "
+                    f"[{job_id}] Saved checkpoints: {list(checkpoints.keys())}. "
                     f"Rerun ingestion to resume."
                 )
-        
-        # Don't suppress the CancelledError - let it propagate
         raise
 
     except Exception as e:
@@ -466,26 +464,18 @@ async def run_ingestion_pipeline(
             
             if checkpoints:
                 logger.info(
-                    f"[{job_id}] 💾 Saved checkpoints: {list(checkpoints.keys())}. "
+                    f"[{job_id}] Saved checkpoints: {list(checkpoints.keys())}. "
                     f"Rerun to resume."
                 )
 
         job_manager.update_job_status(job_id, JobStatus.FAILED, error_message=error_msg)
-
 
 @router.post("/ingest")
 async def create_ingestion_job(
     request: Request,
     background_tasks: BackgroundTasks
 ):
-    """
-    Create or resume ingestion job
-    
-    Key improvements:
-    1. Automatically detects resumable jobs
-    2. Validates checkpoints exist before resuming
-    3. Clear messaging about resume status
-    """
+    """Create or resume ingestion job"""
     data = await request.json()
 
     company_name = data.get("company_name")
@@ -495,8 +485,7 @@ async def create_ingestion_job(
     zoho_cred_encrypted = data.get("zoho_cred_encrypted")
     zoho_region = data.get("zoho_region", "IN")
     
-    # NEW: Allow explicit resume control
-    force_new_job = data.get("force_new_job", False)  # Set to True to skip resume
+    force_new_job = data.get("force_new_job", False)
 
     if not company_name:
         raise HTTPException(status_code=400, detail="'company_name' is required")
@@ -507,7 +496,6 @@ async def create_ingestion_job(
     company_directory = os.path.join(base_directory, company_name)
     os.makedirs(company_directory, exist_ok=True)
 
-    # Parse inputs (same as before)
     s3_file_keys_list = []
     if s3_file_keys:
         if isinstance(s3_file_keys, list):
@@ -550,24 +538,31 @@ async def create_ingestion_job(
 
     job_manager = JobManager(get_pool())
     
-    # ============================================================
-    # SMART JOB RESUME LOGIC
-    # ============================================================
     job_id = None
     resumed = False
     
     if not force_new_job:
-        job_id = should_resume_job(job_manager, company_name)
-        if job_id:
+        resumable_job = job_manager.get_latest_interruptible_job(company_name)
+        if resumable_job:
+            job_id = resumable_job['job_id']
             resumed = True
-            logger.info(f"Resuming interrupted job {job_id} for {company_name}")
+            logger.info(f"Resuming job {job_id} for {company_name}")
         else:
             logger.info(f"No resumable job found, creating new job for {company_name}")
-    else:
-        logger.info(f"force_new_job=True, creating new job for {company_name}")
-    
-    # Create new job if no resumable job found
+
     if not job_id:
+        logger.info(f"Creating new job - checking for latest completed job for {company_name}")
+        latest_completed = job_manager.get_latest_completed_job(company_name)
+        
+        if latest_completed:
+            error_msg = latest_completed.get('error_message') or ''
+            if not error_msg.startswith('Ingestion failed'):
+                cleared_count = job_manager.clear_processed_tables_for_company(company_name)
+                if cleared_count > 0:
+                    logger.info(
+                        f"Cleared {cleared_count} previous processing records for fresh restart"
+                    )
+        
         job_id = job_manager.create_job(
             company_name=company_name,
             metadata={
@@ -579,7 +574,6 @@ async def create_ingestion_job(
         )
         logger.info(f"Created new job {job_id} for {company_name}")
 
-    # Create task and track it
     task = asyncio.create_task(
         run_ingestion_pipeline(
             job_id=job_id,
@@ -593,11 +587,9 @@ async def create_ingestion_job(
         )
     )
     
-    # Track the background task
     try:
         from main import background_tasks_running
         background_tasks_running.add(task)
-        # Remove from tracking when done
         task.add_done_callback(lambda t: background_tasks_running.discard(t))
     except ImportError:
         logger.warning("Could not import background_tasks_running from main")
@@ -618,7 +610,6 @@ async def create_ingestion_job(
         }
     )
 
-# Get status of an ingestion job
 @router.get("/jobs/{job_id}/status")
 async def get_job_status(job_id: str):
     """Get status of an ingestion job"""
@@ -630,7 +621,6 @@ async def get_job_status(job_id: str):
     
     return JSONResponse(status_code=200, content=job_data)
 
-# Get all processed files for a company
 @router.get("/companies/{company_name}/files")
 async def get_company_files(company_name: str):
     """Get all processed files for a company"""
@@ -674,7 +664,6 @@ async def get_company_files(company_name: str):
         if conn:
             pool.putconn(conn)
 
-# Get all processed websites for a company
 @router.get("/companies/{company_name}/websites")
 async def get_company_websites(company_name: str):
     """Get all processed websites for a company"""
@@ -717,9 +706,6 @@ async def get_company_websites(company_name: str):
         if conn:
             pool.putconn(conn)
 
-    # 
-
-# Get all processed databases for a company
 @router.get("/companies/{company_name}/databases")
 async def get_company_databases(company_name: str):
     """Get all processed databases for a company"""
@@ -763,7 +749,6 @@ async def get_company_databases(company_name: str):
         if conn:
             pool.putconn(conn)
 
-# Get all processed Zoho reports for a company
 @router.get("/companies/{company_name}/zoho-reports")
 async def get_company_zoho_reports(company_name: str):
     """Get all processed Zoho reports for a company"""
@@ -808,7 +793,6 @@ async def get_company_zoho_reports(company_name: str):
             pool.putconn(conn)
 
 
-# ADD NEW ENDPOINT to check checkpoint status:
 @router.get("/jobs/{job_id}/checkpoints")
 async def get_job_checkpoints(job_id: str):
     """Get checkpoint status for a job"""
@@ -827,7 +811,6 @@ async def get_job_checkpoints(job_id: str):
             }
         )
     
-    # Calculate progress
     progress_info = {}
     for phase, data in checkpoints.items():
         if 'last_batch_index' in data and 'total_batches' in data:
@@ -852,7 +835,6 @@ async def get_job_checkpoints(job_id: str):
     )
 
 
-# ADD NEW ENDPOINT to manually clear checkpoints:
 @router.delete("/jobs/{job_id}/checkpoints")
 async def clear_job_checkpoints(job_id: str):
     """Manually clear checkpoints for a job"""
@@ -862,7 +844,6 @@ async def clear_job_checkpoints(job_id: str):
         checkpoint_manager = CheckpointManager(get_pool())
         item_tracker = ProcessedItemTracker(get_pool())
         
-        # Clear all checkpoints and tracked items
         checkpoint_manager.clear_checkpoint(job_id)
         item_tracker.clear_items(job_id)
         

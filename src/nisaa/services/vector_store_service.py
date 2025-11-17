@@ -20,7 +20,7 @@ class VectorStoreService:
         self.index_name = index_name or os.getenv('PINECONE_INDEX')
         self.pc = LangchainPinecone(api_key=self.api_key)
         self.index = self.pc.Index(self.index_name)
-        logger.info(f"📌 Connected to Pinecone index: {self.index_name}")
+        logger.info(f" Connected to Pinecone index: {self.index_name}")
     
     def prepare_document_vectors(
         self,
@@ -109,58 +109,53 @@ class VectorStoreService:
         combined = "".join(sorted(batch_ids))
         return hashlib.md5(combined.encode('utf-8')).hexdigest()
     
-    """
-    Replace upsert_vectors and upsert_json_vectors in vector_store_service.py
-    SIMPLIFIED: Only batch index tracking
-    """
-
     def upsert_vectors(
-    self,
-    ids: List[str],
-    vectors: List[List[float]],
-    metadatas: List[Dict],
-    namespace: str,
-    batch_size: int = None,
-    checkpoint_manager = None,
-    job_id: str = None,
-    cancellation_event = None  
-
+        self,
+        ids: List[str],
+        vectors: List[List[float]],
+        metadatas: List[Dict],
+        namespace: str,
+        batch_size: int = None,
+        checkpoint_manager = None,
+        job_id: str = None,
+        cancellation_event = None
     ) -> int:
-        """Upsert vectors with proper checkpoint recovery"""
+        """Upsert vectors with FIXED checkpoint recovery"""
         batch_size = batch_size or int(os.getenv('PINECONE_BATCH_SIZE', '100'))
         phase = 'upserting_vectors'
         
-        start_batch_idx = 0
+        start_batch_index = 0
         total_upserted = 0
         
-        # Load checkpoint
         if checkpoint_manager and job_id:
             checkpoint = checkpoint_manager.load_checkpoint(job_id, phase)
             if checkpoint:
-                start_batch_idx = checkpoint.get('last_batch_index', -1) + 1
+                start_batch_index = checkpoint.get('last_batch_index', -1) + 1
                 total_upserted = checkpoint.get('total_upserted', 0)
                 logger.info(
-                    f"🔄 Resuming upsert from batch {start_batch_idx} "
+                    f"Resuming upsert from batch {start_batch_index} "
                     f"({total_upserted} vectors already upserted)"
                 )
         
-        upsert_batches = (len(vectors) - 1) // batch_size + 1
+        total_batches = (len(vectors) + batch_size - 1) // batch_size
         
         logger.info(f"Upserting {len(vectors)} vectors to namespace '{namespace}'...")
         
-        for i in range(start_batch_idx * batch_size, len(vectors), batch_size):
-
+        for batch_index in range(start_batch_index, total_batches):
             if cancellation_event and cancellation_event.is_set():
                 logger.warning(
-                    f"⚠️ Upsert cancelled at batch {i // batch_size + 1}/{upsert_batches}. "
-                    f"Progress saved in checkpoint."
+                    f" Upsert cancelled at batch {batch_index}/{total_batches}. "
+                    f"Progress saved."
                 )
-                return total_upserted 
+                return total_upserted
             
-            batch_ids = ids[i:i + batch_size]
-            batch_vectors = vectors[i:i + batch_size]
-            batch_metadatas = metadatas[i:i + batch_size]
-            batch_num = i // batch_size + 1
+            # Calculate vector slice for this batch
+            start_idx = batch_index * batch_size
+            end_idx = min(start_idx + batch_size, len(vectors))
+            
+            batch_ids = ids[start_idx:end_idx]
+            batch_vectors = vectors[start_idx:end_idx]
+            batch_metadatas = metadatas[start_idx:end_idx]
             
             vectors_to_upsert = list(zip(batch_ids, batch_vectors, batch_metadatas))
             
@@ -180,19 +175,22 @@ class VectorStoreService:
                         company_name=checkpoint_manager.company_name,
                         phase=phase,
                         checkpoint_data={
-                            'last_batch_index': batch_num - 1,
-                            'total_batches': upsert_batches,
+                            'last_batch_index': batch_index, 
+                            'total_batches': total_batches,
                             'total_upserted': total_upserted,
                             'namespace': namespace,
                             'timestamp': time.time()
                         }
                     )
                 
-                logger.info(f"✅ Batch {batch_num}/{upsert_batches}: {upserted_count} vectors")
+                logger.info(
+                    f"✓ Batch {batch_index + 1}/{total_batches}: "
+                    f"{upserted_count} vectors"
+                )
                 time.sleep(0.3)
                 
             except Exception as e:
-                logger.error(f"❌ Batch {batch_num} failed: {e}")
+                logger.error(f"Batch {batch_index + 1} failed: {e}")
                 
                 if checkpoint_manager and job_id:
                     checkpoint_manager.save_checkpoint(
@@ -200,8 +198,8 @@ class VectorStoreService:
                         company_name=checkpoint_manager.company_name,
                         phase=phase,
                         checkpoint_data={
-                            'last_batch_index': batch_num - 2,
-                            'total_batches': upsert_batches,
+                            'last_batch_index': batch_index - 1,
+                            'total_batches': total_batches,
                             'total_upserted': total_upserted,
                             'namespace': namespace,
                             'error': str(e),
@@ -214,9 +212,8 @@ class VectorStoreService:
         if checkpoint_manager and job_id:
             checkpoint_manager.clear_checkpoint(job_id, phase)
         
-        logger.info(f"✅ Total upserted: {total_upserted}/{len(vectors)}")
+        logger.info(f"✓ Total upserted: {total_upserted}/{len(vectors)}")
         return total_upserted
-
 
     def upsert_json_vectors(
         self,
@@ -243,7 +240,7 @@ class VectorStoreService:
                 start_batch_idx = checkpoint.get('last_batch_index', -1) + 1
                 total_upserted = checkpoint.get('total_upserted', 0)
                 logger.info(
-                    f"🔄 Resuming JSON upsert from batch {start_batch_idx} "
+                    f"Resuming JSON upsert from batch {start_batch_idx} "
                     f"({total_upserted} vectors already upserted)"
                 )
         
@@ -277,7 +274,7 @@ class VectorStoreService:
                 logger.info(f"✓ JSON Batch {batch_num}/{upsert_batches}: {len(batch)} vectors")
                 
             except Exception as e:
-                logger.error(f"❌ JSON Batch {batch_num} failed: {e}")
+                logger.error(f"JSON Batch {batch_num} failed: {e}")
                 
                 # Save checkpoint on error
                 if checkpoint_manager and job_id:
@@ -300,7 +297,7 @@ class VectorStoreService:
         if checkpoint_manager and job_id:
             checkpoint_manager.clear_checkpoint(job_id, phase)
         
-        logger.info(f"✅ Total JSON vectors upserted: {total_upserted}")
+        logger.info(f"Total JSON vectors upserted: {total_upserted}")
         return total_upserted
     def verify_upsert(self, namespace: str, expected_count: int):
         """Verify vectors were successfully uploaded"""
@@ -314,7 +311,7 @@ class VectorStoreService:
             if namespace_count < expected_count:
                 logger.warning(f"Expected {expected_count}, found {namespace_count}")
             else:
-                logger.info(f"✅ All {expected_count} vectors stored correctly")
+                logger.info(f"All {expected_count} vectors stored correctly")
         except Exception as e:
             logger.warning(f"Could not verify: {e}")
     

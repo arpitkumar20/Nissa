@@ -246,7 +246,6 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"Marked file as processed: {file_path}")
             
         except Exception as e:
             if conn:
@@ -332,7 +331,6 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"Marked website as processed: {website_url}")
             
         except Exception as e:
             if conn:
@@ -419,7 +417,6 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"Marked database as processed: {db_name}")
             
         except Exception as e:
             if conn:
@@ -436,11 +433,7 @@ class JobManager:
         report_name: str,
         content_hash: str
     ) -> Optional[Dict[str, Any]]:
-        """
-        Check if Zoho report has already been processed
-        
-        Uses content hash to detect if data has changed
-        """
+        """Check if Zoho report has already been processed"""
         conn = None
         try:
             conn = self.pool.getconn()
@@ -512,7 +505,6 @@ class JobManager:
                 ))
             
             conn.commit()
-            logger.info(f"Marked Zoho report as processed: {report_name}")
 
         except Exception as e:
             if conn:
@@ -592,7 +584,6 @@ class JobManager:
                     row_count, vector_count, job_id, json.dumps(metadata or {})
                 ))
                 conn.commit()
-                logger.info(f"Marked table {table_name} as processed")
         except Exception as e:
             if conn:
                 conn.rollback()
@@ -604,38 +595,51 @@ class JobManager:
     
     
     def get_latest_interruptible_job(self, company_name: str) -> Optional[Dict]:
-        """Get the latest FAILED or long-RUNNING job with checkpoints"""
+        """Get the latest job with verified checkpoints, regardless of status"""
         conn = None
         try:
             conn = self.pool.getconn()
             with conn.cursor() as cur:
-                # Find latest job that's FAILED or stuck in RUNNING for >5 minutes
                 cur.execute("""
-                    SELECT ij.job_id, ij.status, ij.error_message, ij.created_at, ij.updated_at
+                    SELECT ij.job_id, ij.status, ij.error_message, 
+                        ij.created_at, ij.updated_at, ij.completed_at
                     FROM ingestion_jobs ij
-                    WHERE ij.company_name = %s 
-                    AND (
-                        ij.status = 'failed'
-                        OR (ij.status = 'running' AND ij.updated_at < NOW() - INTERVAL '5 minutes')
-                    )
-                    AND EXISTS (
-                        SELECT 1 FROM ingestion_checkpoints ic 
-                        WHERE ic.job_id = ij.job_id
-                    )
+                    WHERE ij.company_name = %s
                     ORDER BY ij.created_at DESC
-                    LIMIT 1
+                    LIMIT 10
                 """, (company_name,))
                 
-                row = cur.fetchone()
-                if row:
+                rows = cur.fetchall()
+                if not rows:
+                    return None
+                
+                from nisaa.services.checkpoint_manager import CheckpointManager
+                checkpoint_manager = CheckpointManager(self.pool)
+                
+                for row in rows:
                     job_id = row[0]
-                    logger.info(f"Found resumable job: {job_id} (status: {row[1]})")
+                    job_status = row[1]
                     
-                    # Reset to PENDING
+                    checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
+                    if not checkpoints:
+                        continue
+                    
+                    checkpoint_file = checkpoint_manager.checkpoint_dir / f"{job_id}_pipeline_state.json"
+                    data_file = checkpoint_manager.checkpoint_dir / f"{job_id}_pipeline_state_data.json"
+                    
+                    if not (checkpoint_file.exists() and data_file.exists()):
+                        checkpoint_manager.clear_checkpoint(job_id, 'pipeline_state')
+                        continue
+                    
+                    logger.info(
+                        f"Found resumable job: {job_id} (status: {job_status}, "
+                        f"checkpoints: {list(checkpoints.keys())})"
+                    )
+                    
                     cur.execute("""
                         UPDATE ingestion_jobs 
                         SET status = %s, 
-                            error_message = NULL,
+                            error_message = 'Resuming from checkpoint',
                             updated_at = NOW()
                         WHERE job_id = %s
                     """, (JobStatus.PENDING, job_id))
@@ -649,7 +653,9 @@ class JobManager:
                         'resumed': True
                     }
                 
+                logger.info(f"No resumable jobs found for {company_name}")
                 return None
+            
         except Exception as e:
             if conn:
                 conn.rollback()
@@ -661,3 +667,64 @@ class JobManager:
                     self.pool.putconn(conn)
                 except:
                     pass
+    
+    
+    def get_latest_completed_job(self, company_name: str) -> Optional[Dict]:
+        """Get the most recent completed job for a company"""
+        conn = None
+        try:
+            conn = self.pool.getconn()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT job_id, completed_at, error_message, total_vectors
+                    FROM ingestion_jobs
+                    WHERE company_name = %s AND status = %s
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                """, (company_name, JobStatus.COMPLETED))
+                
+                row = cur.fetchone()
+                if row:
+                    return {
+                        'job_id': row[0],
+                        'completed_at': row[1].isoformat() if row[1] else None,
+                        'error_message': row[2],
+                        'total_vectors': row[3]
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"Failed to get latest completed job: {e}")
+            return None
+        finally:
+            if conn:
+                self.pool.putconn(conn)
+    
+    
+    def clear_processed_tables_for_company(self, company_name: str) -> int:
+        """Clear processed DB table records for a company"""
+        conn = None
+        try:
+            conn = self.pool.getconn()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM processed_db_tables
+                    WHERE company_name = %s
+                """, (company_name,))
+                
+                deleted_count = cur.rowcount
+                conn.commit()
+                
+                if deleted_count > 0:
+                    logger.info(
+                        f"Cleared {deleted_count} processed table records for {company_name}"
+                    )
+                
+                return deleted_count
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Failed to clear processed tables: {e}")
+            return 0
+        finally:
+            if conn:
+                self.pool.putconn(conn)

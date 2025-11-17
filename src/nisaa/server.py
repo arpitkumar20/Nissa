@@ -54,7 +54,6 @@ async def lifespan(app: FastAPI):
     """
     Lifespan context manager for startup and shutdown with GRACEFUL handling
     """
-    # STARTUP
     try:
         history_db = PostgresChatHistory()
         stateless_agent = create_stateless_agent()
@@ -79,66 +78,56 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"RAG Engine initialization failed: {e}", exc_info=True)
 
-    # SERVER RUNS HERE
     try:
         yield
     finally:
-        # ============================================================
-        # GRACEFUL SHUTDOWN WITH PROPER ORDERING
-        # ============================================================
+
         global shutdown_in_progress
         shutdown_in_progress = True
         
-        logger.info("🛑 Shutting down Nisaa API Server...")
+        logger.info(">> Shutting down Nisaa API Server...")
         
-        # Step 1: Signal all background tasks to stop
         try:
             from main import background_tasks_running
             if background_tasks_running:
-                logger.info(f"⏳ Signaling {len(background_tasks_running)} background task(s) to stop...")
+                logger.info(f">> Signaling {len(background_tasks_running)} background task(s) to stop...")
                 
-                # Cancel all tasks (triggers CancelledError in run_ingestion_pipeline)
                 for task in background_tasks_running:
                     if not task.done():
                         task.cancel()
                 
-                # Give tasks time to cleanup and save checkpoints
-                logger.info("⏳ Waiting up to 15 seconds for graceful shutdown...")
+                logger.info(">> Waiting up to 15 seconds for graceful shutdown...")
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(*background_tasks_running, return_exceptions=True),
                         timeout=15.0
                     )
-                    logger.info("✅ All background tasks stopped gracefully")
+                    logger.info("✓ All background tasks stopped gracefully")
                 except asyncio.TimeoutError:
-                    logger.warning("⚠️ Some tasks didn't finish within 15 seconds")
-                    logger.warning("💡 Checkpoints were saved - you can resume by restarting ingestion")
+                    logger.warning(" Some tasks didn't finish within 15 seconds")
+                    logger.warning(" Checkpoints were saved - you can resume by restarting ingestion")
                     
-                    # Log which tasks are still running
                     still_running = [t for t in background_tasks_running if not t.done()]
                     if still_running:
-                        logger.warning(f"⚠️ {len(still_running)} task(s) still running")
+                        logger.warning(f" {len(still_running)} task(s) still running")
                     
         except ImportError:
             logger.warning("Could not import background task tracking")
         except Exception as e:
             logger.error(f"Error during task cancellation: {e}")
         
-        # Step 2: Close database connections (even if tasks still running)
         try:
             pool = get_pool()
             if pool and not pool.closed:
-                # Give any pending DB operations time to complete
                 await asyncio.sleep(1)
                 pool.closeall()
-                logger.info("✅ Database connections closed")
+                logger.info("✓ Database connections closed")
         except Exception as e:
             logger.error(f"Error closing database pool: {e}")
         
-        # Step 3: Final status
-        logger.info("🚪 Server shutdown sequence complete")
-        logger.info("📝 Interrupted jobs have saved checkpoints")
-        logger.info("🔄 Resume by calling the ingestion endpoint again with same company name")
+        logger.info(" Server shutdown sequence complete")
+        logger.info(" Interrupted jobs have saved checkpoints")
+        logger.info(" Resume by calling the ingestion endpoint again with same company name")
 
 def create_app() -> FastAPI:
     """Create and configure FastAPI application instance."""
@@ -156,7 +145,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    # Health Check Router
     health_router = APIRouter(prefix="/health", tags=["health"])
 
     @health_router.get("/")
@@ -169,12 +157,10 @@ def create_app() -> FastAPI:
             "version": "1.0.0",
         }
 
-    # Include Routers
     app.include_router(health_router)
     app.include_router(wati_router, tags=["WhatsApp RAG"])
     app.include_router(ingestion_router, tags=["Ingestion"])
 
-    # Global Exception Handler
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
         logger.error(f"Unhandled exception: {exc}", exc_info=True)
@@ -189,17 +175,15 @@ def create_app() -> FastAPI:
 
     return app
 
-# Create the FastAPI app instance
 app = create_app()
 
-# Function to run the server
 def run_server(host: str = "127.0.0.1", port: int = 8000, debug: bool = False) -> None:
     """
     Run the FastAPI server using Uvicorn.
     """
     logger.info(f"✓ Starting server on {host}:{port}")
     logger.info(f"Debug mode: {debug}")
-    # Run Uvicorn server
+
     uvicorn.run(
         app,
         host=host,

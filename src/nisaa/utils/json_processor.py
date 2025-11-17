@@ -122,25 +122,18 @@ def convert_to_natural_language_batch(
     checkpoint_manager=None,  
     job_id: str = None,       
     company_name: str = None,
-    cancellation_event = None   
+    cancellation_event = None
 ) -> List[str]:
-    """Convert entities to natural language with checkpoint support"""
+    """Convert entities with FIXED checkpoint recovery"""
     client = OpenAI(api_key=api_key)
     phase = 'json_conversion'
     
-    # ============================================================
-    # CHECKPOINT RECOVERY: Load previously converted entities
-    # ============================================================
-    start_entity_idx = 0
+    # Initialize
     converted_texts = []
-    
+
     if checkpoint_manager and job_id:
         checkpoint = checkpoint_manager.load_checkpoint(job_id, phase)
         if checkpoint:
-            start_entity_idx = checkpoint.get('last_entity_index', -1) + 1
-            converted_count = checkpoint.get('converted_count', 0)
-            
-            # Load previously converted texts from checkpoint file
             checkpoint_file = checkpoint_manager.checkpoint_dir / f"{job_id}_{phase}_data.json"
             if checkpoint_file.exists():
                 try:
@@ -148,18 +141,30 @@ def convert_to_natural_language_batch(
                         saved_data = json.load(f)
                         converted_texts = saved_data.get('texts', [])
                     
+                    start_entity_index = len(converted_texts)
+                    
                     logger.info(
-                        f"🔄 Resuming JSON conversion from entity {start_entity_idx} "
-                        f"({converted_count} entities already converted)"
+                        f"Resuming JSON conversion from entity {start_entity_index} "
+                        f"({len(converted_texts)} entities already converted)"
                     )
                 except Exception as e:
-                    logger.error(f"Failed to load JSON checkpoint data: {e}")
-                    start_entity_idx = 0
+                    logger.error(f"Failed to load JSON checkpoint: {e}")
                     converted_texts = []
+                    start_entity_index = 0
     
-    # ============================================================
-    # ENTITY PROCESSING FUNCTION (unchanged)
-    # ============================================================
+    # Only process remaining entities
+    total_entities = len(entities)
+    entities_to_process = entities[start_entity_index:]
+    
+    if not entities_to_process:
+        logger.info("All entities already converted")
+        return converted_texts
+    
+    logger.info(
+        f"Processing {len(entities_to_process)}/{total_entities} remaining entities "
+        f"(max {max_workers} workers)..."
+    )
+       
     def process_entity(entity_tuple):
         entity_id, entity_data = entity_tuple
         entity_text = convert_entity_to_text(entity_data)
@@ -227,13 +232,11 @@ Natural language (plain text, all exact values and nested list items included):"
                 else:
                     return (entity_id, f"Error processing {entity_id}: {str(e)}")
     
-    # ============================================================
-    # PARALLEL PROCESSING WITH CHECKPOINTING
-    # ============================================================
+
     total_entities = len(entities)
-    entities_to_process = entities[start_entity_idx:]  # ← Only process remaining
+    entities_to_process = entities[start_entity_index:]  
     
-    if start_entity_idx > 0:
+    if start_entity_index > 0:
         logger.info(
             f"Processing remaining {len(entities_to_process)}/{total_entities} JSON entities "
             f"(max {max_workers} workers)..."
@@ -256,82 +259,64 @@ Natural language (plain text, all exact values and nested list items included):"
         completed = 0
         for future in as_completed(futures):
             if cancellation_event and cancellation_event.is_set():
-                logger.warning(
-                    f"⚠️ JSON conversion cancelled at entity {completed}/{len(entities_to_process)}. "
-                    f"Cancelling remaining work."
-                )
-                # Cancel all pending futures
-                for f in futures:
-                    if not f.done():
-                        f.cancel()
+                logger.warning(f" JSON conversion cancelled at {completed}")
                 executor.shutdown(wait=False, cancel_futures=True)
                 break
-
+            
             idx = futures[future]
             entity_id, text = future.result()
             results[idx] = text
-            converted_texts.append(text)  # ← Add to running list
+            converted_texts.append(text)
             completed += 1
             
-            # ============================================================
-            # SAVE CHECKPOINT EVERY 50 ENTITIES
-            # ============================================================
             if checkpoint_manager and job_id and completed % 50 == 0:
-                current_entity_idx = start_entity_idx + completed - 1
-                
                 checkpoint_manager.save_checkpoint(
                     job_id=job_id,
                     company_name=company_name,
                     phase=phase,
                     checkpoint_data={
-                        'last_entity_index': current_entity_idx,
+                        'converted_count': len(converted_texts), 
                         'total_entities': total_entities,
-                        'converted_count': len(converted_texts),
                         'timestamp': time.time()
                     }
                 )
                 
-                # Save converted texts to file
+                # Save texts
                 data_file = checkpoint_manager.checkpoint_dir / f"{job_id}_{phase}_data.json"
                 with open(data_file, 'w') as f:
                     json.dump({'texts': converted_texts}, f)
                 
                 logger.info(
-                    f"✅ Checkpoint saved: {len(converted_texts)}/{total_entities} entities converted"
+                    f" Checkpoint: {len(converted_texts)}/{total_entities} entities"
                 )
             
-            # Log progress every 10 entities
-            if completed % 10 == 0 or completed == len(entities_to_process):
+            # Log progress
+            if completed % 10 == 0:
                 logger.info(
-                    f"Completed {start_entity_idx + completed}/{total_entities} entities"
+                    f"Completed {start_entity_index + completed}/{total_entities}"
                 )
     
-    # ============================================================
-    # FINAL CHECKPOINT SAVE
-    # ============================================================
+    # Final checkpoint
     if checkpoint_manager and job_id:
         checkpoint_manager.save_checkpoint(
             job_id=job_id,
             company_name=company_name,
             phase=phase,
             checkpoint_data={
-                'last_entity_index': total_entities - 1,
-                'total_entities': total_entities,
                 'converted_count': len(converted_texts),
+                'total_entities': total_entities,
                 'completed': True,
                 'timestamp': time.time()
             }
         )
         
-        # Save final converted texts
         data_file = checkpoint_manager.checkpoint_dir / f"{job_id}_{phase}_data.json"
         with open(data_file, 'w') as f:
             json.dump({'texts': converted_texts}, f)
         
-        logger.info(f"✅ All {len(converted_texts)} entities converted and checkpointed")
+        logger.info(f"All {len(converted_texts)} entities converted")
     
     return converted_texts
-
 def chunk_by_entities(entity_texts: List[str], max_chunk_size: int = 8000, 
                      entities_per_chunk: int = 1) -> List[str]:
     """Chunk texts by entities. Default is 1 entity per chunk for best retrieval"""
@@ -432,13 +417,10 @@ class JSONProcessor:
             logger.info(f"Chunking data...")
             chunks = chunk_by_entities(entity_texts, max_chunk_size=8000, entities_per_chunk=1)
             logger.info(f"Created {len(chunks)} chunks")
-            
-            # ============================================================
-            # CLEAR CHECKPOINT AFTER SUCCESSFUL COMPLETION
-            # ============================================================
+
             if checkpoint_manager and job_id:
                 phase = 'json_conversion'
                 checkpoint_manager.clear_checkpoint(job_id, phase)
-                logger.info(f"✅ Cleared JSON conversion checkpoint for {file_path}")
+                logger.info(f"Cleared JSON conversion checkpoint for {file_path}")
             
             return chunks, entities

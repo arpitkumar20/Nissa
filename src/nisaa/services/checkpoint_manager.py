@@ -74,16 +74,14 @@ class CheckpointManager:
             "timestamp": datetime.now().isoformat()
         })
 
-        # ALWAYS save to file first (most reliable)
         checkpoint_file = self.checkpoint_dir / f"{job_id}_{phase}.json"
         try:
             with open(checkpoint_file, 'w') as f:
                 json.dump(checkpoint_data, f, indent=2)
-            logger.debug(f"✅ Checkpoint saved to file: {checkpoint_file}")
+            logger.debug(f"✓ Checkpoint saved to file: {checkpoint_file}")
         except Exception as e:
             logger.error(f"Failed to save checkpoint to file: {e}")
 
-        # Try DB save (optional, file is primary)
         conn = None
         try:
             conn = self.pool.getconn()
@@ -98,7 +96,7 @@ class CheckpointManager:
                         updated_at = NOW()
                 """, (job_id, company_name, phase, json.dumps(checkpoint_data)))
             conn.commit()
-            logger.info(f"✅ Checkpoint saved: {job_id} - {phase}")
+            logger.info(f"✓ Checkpoint saved: {job_id} - {phase}")
         except Exception as e:
             logger.warning(f"DB checkpoint save failed (file saved): {e}")
             # Don't raise - file checkpoint is sufficient
@@ -159,7 +157,6 @@ class CheckpointManager:
     def clear_checkpoint(self, job_id: str, phase: str = None):
         """Clear checkpoint after successful completion"""
         
-        # First, always try to remove local files (works even if DB is closed)
         try:
             if phase:
                 checkpoint_file = self.checkpoint_dir / f"{job_id}_{phase}.json"
@@ -174,7 +171,6 @@ class CheckpointManager:
         except Exception as e:
             logger.warning(f"Failed to remove checkpoint files: {e}")
         
-        # Then try database cleanup (skip if pool closed)
         conn = None
         try:
             if self.pool.closed:
@@ -189,7 +185,7 @@ class CheckpointManager:
                     cur.execute("DELETE FROM ingestion_checkpoints WHERE job_id = %s", (job_id,))
             
             conn.commit()
-            logger.info(f"✅ Checkpoint cleared: {job_id} - {phase or 'all phases'}")
+            logger.info(f"✓ Checkpoint cleared: {job_id} - {phase or 'all phases'}")
             
         except Exception as e:
             if conn:
@@ -289,7 +285,6 @@ class ProcessedItemTracker:
         try:
             conn = self.pool.getconn()
             with conn.cursor() as cur:
-                # Batch insert
                 values = [
                     (job_id, item_type, hash_val, batch_index, phase)
                     for hash_val in item_hashes
