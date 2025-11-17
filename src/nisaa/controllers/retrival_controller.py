@@ -1,8 +1,7 @@
 import os
 import re
 import logging
-from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+from typing import List, Dict, Any, Tuple
 from dotenv import load_dotenv
 
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
@@ -45,6 +44,7 @@ class PineconeFuzzyCache:
     def __init__(self):
         self._cache = {}
         self._initialized = {}
+        self._processed_cache = {}  # Pre-processed for fuzzy matching
     
     def get_or_load(self, namespace: str, index, max_samples: int = 500) -> Dict[str, List[str]]:
         """
@@ -57,13 +57,13 @@ class PineconeFuzzyCache:
             return self._cache[namespace]
         
         metadata_cache = {
-            'doctors': [],
-            'specialties': [],
-            'departments': [],
-            'full_names': [],
-            'phones': [],
-            'record_ids': [],
-            'unique_ids': []
+            'doctors': set(),
+            'specialties': set(),
+            'departments': set(),
+            'full_names': set(),
+            'phones': set(),
+            'record_ids': set(),
+            'unique_ids': set()
         }
         
         try:
@@ -74,7 +74,7 @@ class PineconeFuzzyCache:
             
             if vector_count == 0:
                 logger.warning(f"No vectors found in namespace: {namespace}")
-                return metadata_cache
+                return {k: [] for k in metadata_cache.keys()}
             
             # Query with dummy vector to get samples
             sample_size = min(max_samples, vector_count)
@@ -85,49 +85,44 @@ class PineconeFuzzyCache:
                 include_metadata=True
             )
             
-            # Extract unique values from metadata
+            # Extract unique values from metadata - optimized with set operations
             for match in results.get('matches', []):
                 metadata = match.get('metadata', {})
                 
-                # Extract doctor names
-                for key in ['doctor_name', 'name']:
-                    if key in metadata and metadata[key]:
-                        metadata_cache['doctors'].append(str(metadata[key]).strip())
+                # Use get with default to avoid key checks
+                doctor_name = metadata.get('doctor_name') or metadata.get('name')
+                if doctor_name:
+                    metadata_cache['doctors'].add(str(doctor_name).strip())
                 
-                # Extract specialties
-                if 'specialty' in metadata and metadata['specialty']:
-                    metadata_cache['specialties'].append(str(metadata['specialty']).strip())
+                if specialty := metadata.get('specialty'):
+                    metadata_cache['specialties'].add(str(specialty).strip())
                 
-                # Extract departments
-                if 'department' in metadata and metadata['department']:
-                    metadata_cache['departments'].append(str(metadata['department']).strip())
+                if department := metadata.get('department'):
+                    metadata_cache['departments'].add(str(department).strip())
                 
-                # Extract full names
-                if 'full_name' in metadata and metadata['full_name']:
-                    metadata_cache['full_names'].append(str(metadata['full_name']).strip())
+                if full_name := metadata.get('full_name'):
+                    metadata_cache['full_names'].add(str(full_name).strip())
                 
-                # Extract phones
-                if 'phone' in metadata and metadata['phone']:
-                    metadata_cache['phones'].append(str(metadata['phone']).strip())
+                if phone := metadata.get('phone'):
+                    metadata_cache['phones'].add(str(phone).strip())
                 
-                # Extract IDs
-                if 'record_id' in metadata and metadata['record_id']:
-                    metadata_cache['record_ids'].append(str(metadata['record_id']).strip())
+                if record_id := metadata.get('record_id'):
+                    metadata_cache['record_ids'].add(str(record_id).strip())
                 
-                if 'unique_id' in metadata and metadata['unique_id']:
-                    metadata_cache['unique_ids'].append(str(metadata['unique_id']).strip())
+                if unique_id := metadata.get('unique_id'):
+                    metadata_cache['unique_ids'].add(str(unique_id).strip())
             
-            # Remove duplicates and sort
-            for key in metadata_cache:
-                metadata_cache[key] = sorted(list(set(metadata_cache[key])))
+            # Convert sets to sorted lists once
+            final_cache = {k: sorted(v) for k, v in metadata_cache.items()}
             
-            self._cache[namespace] = metadata_cache
+            self._cache[namespace] = final_cache
             self._initialized[namespace] = True
             
         except Exception as e:
             logger.error(f"Failed to load metadata cache: {e}")
+            return {k: [] for k in metadata_cache.keys()}
         
-        return metadata_cache
+        return self._cache[namespace]
 
 
 # Global cache instance
@@ -194,6 +189,8 @@ class HybridRAGQueryEngine:
         # Compile regex patterns once
         self._compile_patterns()
 
+        self._word_cache = {}
+
     def _compile_patterns(self):
         """Pre-compile all regex patterns for better performance"""
         self.patterns = {
@@ -206,6 +203,8 @@ class HybridRAGQueryEngine:
             "unique_id_plain": re.compile(r"\b[A-Z]{2,}\d{5,}\b", re.IGNORECASE),
         }
 
+        self._clean_pattern = re.compile(r'[^\w\s]')
+
     def fuzzy_correct_query(self, query: str, threshold: int = 80) -> Tuple[str, List[Dict]]:
         """
         Apply fuzzy matching to correct typos in query against Pinecone metadata
@@ -216,10 +215,6 @@ class HybridRAGQueryEngine:
         
         Returns:
             Tuple of (corrected_query, list_of_corrections)
-        
-        Example:
-            Input: "Show me Dr. Prya Shrama in cardilogist"
-            Output: ("Show me Dr. Priya Sharma in cardiologist", [...corrections...])
         """
         if not FUZZY_AVAILABLE:
             return query, []
@@ -228,24 +223,30 @@ class HybridRAGQueryEngine:
         corrected_query = query
         words = query.split()
         
-        # Try to match multi-word phrases (doctor names)
-        for i in range(len(words)):
-            for j in range(min(i + 4, len(words)), i, -1):  # Up to 4-word phrases
-                phrase = ' '.join(words[i:j])
-                
-                # Match against doctor names
-                if self.metadata_cache['doctors']:
+        corrected_positions = set()
+        
+        if self.metadata_cache['doctors']:
+            for i in range(len(words)):
+                if i in corrected_positions:
+                    continue
+                    
+                for j in range(min(i + 4, len(words)), i, -1):  # Up to 4-word phrases
+                    if any(k in corrected_positions for k in range(i, j)):
+                        continue
+                        
+                    phrase = ' '.join(words[i:j])
+                    
                     result = process.extractOne(
                         phrase,
                         self.metadata_cache['doctors'],
                         scorer=fuzz.WRatio,
-                        score_cutoff=threshold - 5  # Slightly lower for names
+                        score_cutoff=threshold - 5
                     )
                     
                     if result:
                         matched_name, score, _ = result
-                        if score >= threshold - 5:  # Only use high-confidence matches
-                            corrected_query = corrected_query.replace(phrase, matched_name)
+                        if score >= threshold - 5:
+                            corrected_query = corrected_query.replace(phrase, matched_name, 1)
                             corrections.append({
                                 'original': phrase,
                                 'corrected': matched_name,
@@ -254,15 +255,18 @@ class HybridRAGQueryEngine:
                                 'source': 'pinecone_metadata'
                             })
                             logger.info(f"Fuzzy matched doctor: '{phrase}' -> '{matched_name}' (score: {score})")
+                            corrected_positions.update(range(i, j))
                             break
         
-        # Match individual words against specialties
-        for word in words:
-            clean_word = re.sub(r'[^\w\s]', '', word)
-            if len(clean_word) < 3:  # Skip very short words
+        for idx, word in enumerate(words):
+            if idx in corrected_positions:
+                continue
+                
+            clean_word = self._clean_pattern.sub('', word)
+            if len(clean_word) < 3:
                 continue
             
-            # Try specialty matching
+            # Try specialty matching first (usually more specific)
             if self.metadata_cache['specialties']:
                 result = process.extractOne(
                     clean_word,
@@ -277,6 +281,7 @@ class HybridRAGQueryEngine:
                         r'\b' + re.escape(clean_word) + r'\b',
                         matched_specialty,
                         corrected_query,
+                        count=1,
                         flags=re.IGNORECASE
                     )
                     corrections.append({
@@ -287,13 +292,9 @@ class HybridRAGQueryEngine:
                         'source': 'pinecone_metadata'
                     })
                     logger.info(f"Fuzzy matched specialty: '{clean_word}' -> '{matched_specialty}' (score: {score})")
-        
-        # Match against departments
-        for word in words:
-            clean_word = re.sub(r'[^\w\s]', '', word)
-            if len(clean_word) < 3:
-                continue
+                    continue
             
+            # Try department matching
             if self.metadata_cache['departments']:
                 result = process.extractOne(
                     clean_word,
@@ -308,6 +309,7 @@ class HybridRAGQueryEngine:
                         r'\b' + re.escape(clean_word) + r'\b',
                         matched_dept,
                         corrected_query,
+                        count=1,
                         flags=re.IGNORECASE
                     )
                     corrections.append({
@@ -342,10 +344,6 @@ class HybridRAGQueryEngine:
         
         Returns:
             List of matches with scores
-        
-        Example:
-            field_name='doctor_name', query_value='Dr. Smit'
-            Returns: [{'value': 'Dr. Smith', 'score': 85, 'type': 'doctor_name'}]
         """
         if not FUZZY_AVAILABLE:
             return []
@@ -378,14 +376,15 @@ class HybridRAGQueryEngine:
                 score_cutoff=threshold
             )
             
-            results = []
-            for matched_value, score, _ in matches:
-                results.append({
+            results = [
+                {
                     'value': matched_value,
                     'score': score,
                     'type': field_name,
                     'original_query': query_value
-                })
+                }
+                for matched_value, score, _ in matches
+            ]
             
             if results:
                 logger.info(
@@ -403,7 +402,6 @@ class HybridRAGQueryEngine:
         """
         Enhanced ID detection with fuzzy fallback
         """
-
         # Check for record ID
         if match := self.patterns["record_id"].search(query):
             record_id = match.group()
@@ -427,7 +425,7 @@ class HybridRAGQueryEngine:
         # Check for phone numbers
         if match := self.patterns["phone_formatted"].search(query):
             phone = match.group().strip()
-            phone_digits = len(re.sub(r"\D", "", phone))
+            phone_digits = sum(c.isdigit() for c in phone)  # Faster than regex
             
             if 10 <= phone_digits <= 14:
                 # Try fuzzy match
@@ -515,14 +513,14 @@ class HybridRAGQueryEngine:
 
             if results.matches:
                 logger.info(f"Found {len(results.matches)} exact matches")
-                docs = [
+                # List comprehension is faster than append loop
+                return [
                     Document(
                         page_content=match.metadata.get("text", ""),
                         metadata=match.metadata,
                     )
                     for match in results.matches
                 ]
-                return docs
 
             # Fuzzy fallback - try similar IDs
             logger.warning(f"No exact matches, trying fuzzy ID search")
@@ -552,11 +550,14 @@ class HybridRAGQueryEngine:
                         )
                         
                         for match in results.matches:
-                            metadata = match.metadata.copy()
-                            metadata['fuzzy_match'] = True
-                            metadata['fuzzy_confidence'] = fuzzy_match['score']
-                            metadata['original_query_value'] = id_value
-                            metadata['matched_value'] = corrected_id
+                            # Create metadata dict once
+                            metadata = {
+                                **match.metadata,
+                                'fuzzy_match': True,
+                                'fuzzy_confidence': fuzzy_match['score'],
+                                'original_query_value': id_value,
+                                'matched_value': corrected_id
+                            }
                             
                             all_docs.append(Document(
                                 page_content=metadata.get("text", ""),
@@ -615,7 +616,7 @@ class HybridRAGQueryEngine:
                     doc.metadata['corrections'] = corrections
 
             # Filter by relevance score if available
-            if hasattr(docs[0], "metadata") and "score" in docs[0].metadata:
+            if docs and hasattr(docs[0], "metadata") and "score" in docs[0].metadata:
                 docs = [
                     d for d in docs if d.metadata.get("score", 1.0) >= score_threshold
                 ]
@@ -650,13 +651,14 @@ class HybridRAGQueryEngine:
                 logger.info("Supplementing ID search with semantic search")
                 semantic_docs = self.retrieve_semantic(corrected_query, top_k // 2)
                 
-                # Merge and deduplicate
-                seen_ids = {
-                    doc.metadata.get("id") for doc in docs if "id" in doc.metadata
-                }
+                # Merge and deduplicate efficiently
+                seen_ids = {doc.metadata.get("id") for doc in docs if "id" in doc.metadata}
+                
                 for doc in semantic_docs:
-                    if doc.metadata.get("id") not in seen_ids:
+                    doc_id = doc.metadata.get("id")
+                    if doc_id not in seen_ids:
                         docs.append(doc)
+                        seen_ids.add(doc_id)
                         if len(docs) >= top_k:
                             break
 
