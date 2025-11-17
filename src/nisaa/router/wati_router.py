@@ -61,7 +61,6 @@ try:
     TEMPLATE_DIR = base_dir / "templates"
     
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
-    logger.info(f"Templates directory successfully set to: {TEMPLATE_DIR}")
 
 except Exception as e:
     logger.error(f"CRITICAL: Failed to initialize Jinja2Templates: {e}")
@@ -506,7 +505,7 @@ async def confirm_update_booking(request: Request,background_tasks: BackgroundTa
         logger.info(f"  Slot: {time_slot}")
         logger.info(f"booking_id: {booking_id}")
         
-        booking_id,err=update_booking_details(booking_id=booking_id,doctor_name=doctor_name,doctor_specialty=doctor_specialty,booking_date=date,booking_time=time_slot)
+        booking_id,err=update_booking_details(booking_id=int(booking_id),doctor_name=doctor_name,doctor_specialty=doctor_specialty,booking_date=date,booking_time=time_slot)
         context={"request": request}
         request_id = str(int(time.time() * 1000))  # Unique request ID
         

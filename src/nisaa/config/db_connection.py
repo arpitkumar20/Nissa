@@ -52,7 +52,6 @@ def get_pool() -> pool.ThreadedConnectionPool:
             keepalives_interval=10,
             keepalives_count=5,
         )
-        logger.info("PostgreSQL connection pool created")
     return _pg_pool
 
 

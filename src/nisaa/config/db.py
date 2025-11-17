@@ -203,9 +203,7 @@ def initialize_db():
                 """)
 
             conn.commit()
-            logger.info(
-                "✓ Database tables initialized successfully (including table-level tracking)"
-            )
+
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         raise
