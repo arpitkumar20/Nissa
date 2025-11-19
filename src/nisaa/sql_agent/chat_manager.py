@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List
 
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage, BaseMessage
 from langchain_core.messages.tool import ToolCall
@@ -11,13 +11,20 @@ logger = logging.getLogger(__name__)
 def _get_few_shot_examples(mobile_number: str) -> List[BaseMessage]:
     """
     Returns few-shot examples to guide agent behavior.
-    These examples are prepended to actual chat history.
+    These examples demonstrate the PATTERN of interaction, not real data.
+    The agent learns the flow and structure from these examples.
 
     Returns:
-        List[BaseMessage]: List of example messages showing proper tool usage
+        List[BaseMessage]: List of example messages showing proper tool usage patterns
     """
 
-    few_shot_examples = [
+    few_shot_examples = []
+
+    # ============================================================================
+    # EXAMPLE 1: RAG Query (General Information)
+    # Purpose: Show how to answer general questions using RAG
+    # ============================================================================
+    few_shot_examples.extend([
         HumanMessage(content="What are the hospital's visiting hours?"),
         AIMessage(
             content="",
@@ -26,7 +33,7 @@ def _get_few_shot_examples(mobile_number: str) -> List[BaseMessage]:
                     name="RAG_based_question_answer",
                     args={
                         "query": "hospital visiting hours",
-                        "mobile_number": mobile_number # Change this number with user's mobile_number while tool calling 
+                        "mobile_number": mobile_number
                     },
                     id="call_rag_visiting_hours"
                 )
@@ -34,11 +41,15 @@ def _get_few_shot_examples(mobile_number: str) -> List[BaseMessage]:
         ),
         ToolMessage(
             content='"The hospital visiting hours are from 4:00 PM to 6:00 PM for general wards."',
-            tool_call_id="call_rag_visiting_hours" # (example tool_call_id)
+            tool_call_id="call_rag_visiting_hours"
         ),
         AIMessage(content="The hospital visiting hours are from 4:00 PM to 6:00 PM for general wards.")
-        ]
-    # (Continuing the list from above)
+    ])
+
+    # ============================================================================
+    # EXAMPLE 2: New Appointment Booking Flow
+    # Purpose: Demonstrate complete booking process and that booking_id comes from tool response
+    # ============================================================================
     few_shot_examples.extend([
         HumanMessage(content="I need to book an appointment with Dr. Priya Sharma, she's a cardiologist."),
         AIMessage(
@@ -50,7 +61,7 @@ def _get_few_shot_examples(mobile_number: str) -> List[BaseMessage]:
                         "doctor_name": "Dr. Priya Sharma",
                         "specialty": "Cardiology"
                     },
-                    id="call_get_slots_priya"
+                    id="call_get_slots_1"
                 )
             ]
         ),
@@ -63,13 +74,26 @@ def _get_few_shot_examples(mobile_number: str) -> List[BaseMessage]:
                 "start_time": "10:00",
                 "end_time": "14:00",
                 "next_two_dates": [
-                    {"date": "2025-11-12", "weekday": "Wednesday", "slots": [{"token_no": 1, "start_time": "10:00", "end_time": "10:15", "status": "Available"}, ...]},
-                    {"date": "2025-11-14", "weekday": "Friday", "slots": [{"token_no": 1, "start_time": "10:00", "end_time": "10:15", "status": "Available"}, ...]}
+                    {
+                        "date": "2025-11-12",
+                        "weekday": "Wednesday",
+                        "slots": [
+                            {"token_no": 1, "start_time": "10:00", "end_time": "10:15", "status": "Available"},
+                            {"token_no": 2, "start_time": "10:15", "end_time": "10:30", "status": "Available"}
+                        ]
+                    },
+                    {
+                        "date": "2025-11-14",
+                        "weekday": "Friday",
+                        "slots": [
+                            {"token_no": 1, "start_time": "10:00", "end_time": "10:15", "status": "Available"}
+                        ]
+                    }
                 ]
             }""",
-            tool_call_id="call_get_slots_priya"
+            tool_call_id="call_get_slots_1"
         ),
-        AIMessage(content="Dr. Priya Sharma is available on Wednesday, November 12th, with slots starting at 10:00 AM, and Friday, November 14th, with slots starting at 10:00 AM. Which date and time would you prefer?"),
+        AIMessage(content="Dr. Priya Sharma is available on Wednesday, November 12th, and Friday, November 14th. Both days have slots starting at 10:00 AM. Which date and time would you prefer?"),
         HumanMessage(content="November 12th at 10:00 AM sounds good."),
         AIMessage(
             content="",
@@ -81,117 +105,209 @@ def _get_few_shot_examples(mobile_number: str) -> List[BaseMessage]:
                         "doctor_specialty": "Cardiology",
                         "date": "2025-11-12",
                         "time_slot": "10:00",
-                        "mobile_number": mobile_number # Change this number with user's mobile_number while tool calling 
+                        "mobile_number": mobile_number
                     },
-                    id="call_book_appt_priya"
+                    id="call_book_1"
                 )
             ]
         ),
         ToolMessage(
-            content='{"doctor": "Dr. Priya Sharma", "date": "2025-11-12", "time": "10:00", "status": "pending(Click Book Now button to confirm)"}',
-            tool_call_id="call_book_appt_priya"
+            content='{"booking_id": 31, "doctor": "Dr. Priya Sharma", "date": "2025-11-12", "time": "10:00", "status": "pending(Click Book Now button to confirm)"}',
+            tool_call_id="call_book_1"
         ),
-        AIMessage(content="Great, I have a pending appointment for you with Dr. Priya Sharma on November 12, 2025, at 10:00 AM. Please check your WhatsApp for a confirmation message and click the 'Book Now' button to finalize it.")
-        ])
-    # (Continuing the list from above)
-    few_shot_examples.extend([
-    HumanMessage(content="I need to cancel my appointment."),
-    AIMessage(
-        content="",
-        tool_calls=[
-            ToolCall(
-                name="get_bookings_details",
-                args={"mobile_number": mobile_number}, # Change this number with user's mobile_number while tool calling
-                id="call_get_bookings_cancel"  # <-- Uses the variable
-            )
-        ]
-    ),
-    ToolMessage(
-        content='[{"booking_id": "B-1001", "doctor_name": "Dr. Arjun Gupta", "doctor_specialty": "Orthopedics", "booking_date": "2025-11-15", "booking_time": "11:00:00"}]',
-        tool_call_id="call_get_bookings_cancel"
-    ),
-    AIMessage(content="I see you have one appointment with Dr. Arjun Gupta (Orthopedics) on November 15, 2025, at 11:00 AM. Are you sure you want to cancel this?"),
-    HumanMessage(content="Yes, please cancel it."),
-    AIMessage(
-        content="",
-        tool_calls=[
-            ToolCall(
-                name="cancel_booking_appointment",
-                args={
-                    "booking_id": "B-1001",
-                    "doctor_name": "Dr. Arjun Gupta",
-                    "doctor_specialty": "Orthopedics",
-                    "dates": "2025-11-15",
-                    "time_slot": "11:00:00",
-                    "mobile_number": mobile_number # Change this number with user's mobile_number while tool calling 
-                },
-                id="call_cancel_tool"
-            )
-        ]
-    ),
-    ToolMessage(
-        content='"User need to press Confirm Update button to finalise the updation in booking.After that User should revisit booking details."', # (Using your tool's exact response)
-        tool_call_id="call_cancel_tool"
-    ),
-    AIMessage(content="Okay, I have started the cancellation for your appointment with Dr. Arjun Gupta. Please check your WhatsApp for a message and click the button to confirm the cancellation.")
+        AIMessage(content="Great! I've created a pending appointment (Booking ID: 31) with Dr. Priya Sharma on November 12, 2025, at 10:00 AM. Please check your WhatsApp for a confirmation message and click the 'Book Now' button to finalize your appointment.")
     ])
-    # (Continuing the list from above)
+
+    # ============================================================================
+    # EXAMPLE 3: View Existing Bookings
+    # Purpose: Show that booking_id always comes from get_bookings_details
+    # ============================================================================
     few_shot_examples.extend([
-        HumanMessage(content="I want to reschedule my appointment."),
+        HumanMessage(content="Can you show me my appointments?"),
         AIMessage(
             content="",
             tool_calls=[
                 ToolCall(
                     name="get_bookings_details",
-                    args={"mobile_number": mobile_number}, # Change this number with user's mobile_number while tool calling # <-- Uses the variable
-                    id="call_get_bookings_update"
+                    args={"mobile_number": mobile_number},
+                    id="call_get_bookings_1"
                 )
             ]
         ),
         ToolMessage(
-            content='[{"booking_id": "B-2005", "doctor_name": "Dr. Rohan Joshi", "doctor_specialty": "Dermatology", "booking_date": "2025-11-20", "booking_time": "14:00:00"}]',
-            tool_call_id="call_get_bookings_update"
+            content='[{"booking_id": 31, "doctor_name": "Dr. Priya Sharma", "doctor_specialty": "Cardiology", "booking_date": "2025-11-12", "booking_time": "10:00:00"}, {"booking_id": 101, "doctor_name": "Dr. Arjun Gupta", "doctor_specialty": "Orthopedics", "booking_date": "2025-11-15", "booking_time": "11:00:00"}]',
+            tool_call_id="call_get_bookings_1"
         ),
-        AIMessage(content="I see you have one appointment with Dr. Rohan Joshi (Dermatology) on November 20, 2025, at 2:00 PM. Would you like to change the date, time, or see a different doctor?"),
-        HumanMessage(content="I want to see a different doctor."),
-        AIMessage(content="Certainly. What is the name of the new doctor you would like to see?"),
-        HumanMessage(content="How about Dr. Amit Singh?"),
+        AIMessage(content="You have 2 appointments:\n\n1. **Booking ID: 31** - Dr. Priya Sharma (Cardiology) on November 12, 2025, at 10:00 AM\n2. **Booking ID: 101** - Dr. Arjun Gupta (Orthopedics) on November 15, 2025, at 11:00 AM")
+    ])
+
+    # ============================================================================
+    # EXAMPLE 4: Cancel Appointment
+    # Purpose: Show that booking_id MUST come from get_bookings_details first
+    # ============================================================================
+    few_shot_examples.extend([
+        HumanMessage(content="I need to cancel my appointment with Dr. Arjun Gupta."),
+        AIMessage(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    name="get_bookings_details",
+                    args={"mobile_number": mobile_number},
+                    id="call_get_bookings_2"
+                )
+            ]
+        ),
+        ToolMessage(
+            content='[{"booking_id": 101, "doctor_name": "Dr. Arjun Gupta", "doctor_specialty": "Orthopedics", "booking_date": "2025-11-15", "booking_time": "11:00:00"}]',
+            tool_call_id="call_get_bookings_2"
+        ),
+        AIMessage(content="I found your appointment: **Booking ID: 101** with Dr. Arjun Gupta (Orthopedics) on November 15, 2025, at 11:00 AM. Are you sure you want to cancel this appointment?"),
+        HumanMessage(content="Yes, please cancel it."),
+        AIMessage(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    name="cancel_booking_appointment",
+                    args={
+                        "booking_id": "101",
+                        "doctor_name": "Dr. Arjun Gupta",
+                        "doctor_specialty": "Orthopedics",
+                        "dates": "2025-11-15",
+                        "time_slot": "11:00:00",
+                        "mobile_number": mobile_number
+                    },
+                    id="call_cancel_1"
+                )
+            ]
+        ),
+        ToolMessage(
+            content='"User need to press Confirm Update button to finalise the updation in booking.After that User should revisit booking details."',
+            tool_call_id="call_cancel_1"
+        ),
+        AIMessage(content="I've initiated the cancellation for your appointment (Booking ID: 101) with Dr. Arjun Gupta. Please check your WhatsApp and click the 'Confirm Cancellation' button to complete the process.")
+    ])
+
+    # ============================================================================
+    # EXAMPLE 5: Reschedule Appointment (Change Date/Time - Same Doctor)
+    # Purpose: Show how to get booking_id, then use it for updates
+    # ============================================================================
+    few_shot_examples.extend([
+        HumanMessage(content="I want to reschedule my appointment with Dr. Priya Sharma to a different date."),
+        AIMessage(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    name="get_bookings_details",
+                    args={"mobile_number": mobile_number},
+                    id="call_get_bookings_3"
+                )
+            ]
+        ),
+        ToolMessage(
+            content='[{"booking_id": 31, "doctor_name": "Dr. Priya Sharma", "doctor_specialty": "Cardiology", "booking_date": "2025-11-12", "booking_time": "10:00:00"}]',
+            tool_call_id="call_get_bookings_3"
+        ),
+        AIMessage(content="I found your appointment: **Booking ID: 31** with Dr. Priya Sharma (Cardiology) on November 12, 2025, at 10:00 AM. Let me check available slots for rescheduling."),
+        AIMessage(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    name="get_next_two_available_days_and_slot",
+                    args={
+                        "doctor_name": "Dr. Priya Sharma",
+                        "specialty": "Cardiology"
+                    },
+                    id="call_get_slots_2"
+                )
+            ]
+        ),
+        ToolMessage(
+            content='{"doctor_id": "D123", "doctor_name": "Dr. Priya Sharma", "next_two_dates": [{"date": "2025-11-14", "weekday": "Friday", "slots": [{"token_no": 1, "start_time": "10:00", "end_time": "10:15", "status": "Available"}, {"token_no": 3, "start_time": "10:30", "end_time": "10:45", "status": "Available"}]}, {"date": "2025-11-16", "weekday": "Sunday", "slots": [{"token_no": 2, "start_time": "11:00", "end_time": "11:15", "status": "Available"}]}]}',
+            tool_call_id="call_get_slots_2"
+        ),
+        AIMessage(content="Dr. Priya Sharma has availability on:\n- Friday, November 14th at 10:00 AM or 10:30 AM\n- Sunday, November 16th at 11:00 AM\n\nWhich slot would you prefer?"),
+        HumanMessage(content="Friday at 10:30 AM works better for me."),
+        AIMessage(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    name="update_booking_appointment",
+                    args={
+                        "booking_id": "31",
+                        "new_doctor_name": "Dr. Priya Sharma",
+                        "doctor_specialty": "Cardiology",
+                        "new_date": "2025-11-14",
+                        "new_time_slot": "10:30",
+                        "mobile_number": mobile_number
+                    },
+                    id="call_update_1"
+                )
+            ]
+        ),
+        ToolMessage(
+            content='"User need to press Confirm Update button to finalise the updation in booking.After that User should revisit booking details."',
+            tool_call_id="call_update_1"
+        ),
+        AIMessage(content="Perfect! I've updated your appointment (Booking ID: 31). Your new appointment with Dr. Priya Sharma is scheduled for Friday, November 14, 2025, at 10:30 AM. Please check your WhatsApp and click the 'Confirm Update' button to finalize this change.")
+    ])
+
+    # ============================================================================
+    # EXAMPLE 6: Change Doctor (Complex Update Flow with Validation)
+    # Purpose: Show doctor validation and alternative suggestions
+    # ============================================================================
+    few_shot_examples.extend([
+        HumanMessage(content="I want to change my dermatology appointment to see a different doctor."),
+        AIMessage(
+            content="",
+            tool_calls=[
+                ToolCall(
+                    name="get_bookings_details",
+                    args={"mobile_number": mobile_number},
+                    id="call_get_bookings_4"
+                )
+            ]
+        ),
+        ToolMessage(
+            content='[{"booking_id": 205, "doctor_name": "Dr. Rohan Joshi", "doctor_specialty": "Dermatology", "booking_date": "2025-11-20", "booking_time": "14:00:00"}]',
+            tool_call_id="call_get_bookings_4"
+        ),
+        AIMessage(content="I found your dermatology appointment: **Booking ID: 205** with Dr. Rohan Joshi on November 20, 2025, at 2:00 PM. Which doctor would you like to see instead?"),
+        HumanMessage(content="Is Dr. Amit Singh available?"),
         AIMessage(
             content="",
             tool_calls=[
                 ToolCall(
                     name="RAG_based_question_answer",
                     args={
-                        "query": "Is Dr. Amit Singh a valid doctor at this hospital?",
-                        "mobile_number": mobile_number # Change this number with user's mobile_number while tool calling 
+                        "query": "Is Dr. Amit Singh a dermatologist at this hospital?",
+                        "mobile_number": mobile_number
                     },
-                    id="call_rag_validate_amit"
+                    id="call_rag_1"
                 )
             ]
         ),
         ToolMessage(
             content='"I\'m sorry, but I do not have any information on a Dr. Amit Singh working in this hospital."',
-            tool_call_id="call_rag_validate_amit"
+            tool_call_id="call_rag_1"
         ),
-        # This next AIMessage triggers the *next* tool call, as per your prompt's strict flow.
         AIMessage(
-            content="I'm sorry, I couldn't find Dr. Amit Singh in our system. Let me find other doctors in the Dermatology department for you.",
+            content="I couldn't find Dr. Amit Singh in our system. Let me find other available dermatologists for you.",
             tool_calls=[
                 ToolCall(
                     name="RAG_based_question_answer",
                     args={
-                        "query": "Who are the other doctors in the Dermatology department?",
-                        "mobile_number": mobile_number # Change this number with user's mobile_number while tool calling 
+                        "query": "Who are the dermatologists available at the hospital?",
+                        "mobile_number": mobile_number
                     },
-                    id="call_rag_alternatives"
+                    id="call_rag_2"
                 )
             ]
         ),
         ToolMessage(
             content='"Other doctors in the Dermatology department include Dr. Meera Nair and Dr. Sanjay Verma."',
-            tool_call_id="call_rag_alternatives"
+            tool_call_id="call_rag_2"
         ),
-        AIMessage(content="Other available doctors in the Dermatology department are Dr. Meera Nair and Dr. Sanjay Verma. Would you like to book with one of them?"),
+        AIMessage(content="We have Dr. Meera Nair and Dr. Sanjay Verma available in Dermatology. Would you like to switch to one of them?"),
         HumanMessage(content="Let's go with Dr. Meera Nair."),
         AIMessage(
             content="",
@@ -200,93 +316,43 @@ def _get_few_shot_examples(mobile_number: str) -> List[BaseMessage]:
                     name="get_next_two_available_days_and_slot",
                     args={
                         "doctor_name": "Dr. Meera Nair",
-                        "specialty": "Dermatology" # (Inferred from original booking)
+                        "specialty": "Dermatology"
                     },
-                    id="call_get_slots_meera"
+                    id="call_get_slots_3"
                 )
             ]
         ),
         ToolMessage(
-            content='{"doctor_id": "D456", ..., "next_two_dates": [{"date": "2025-11-21", "weekday": "Friday", "slots": [{"token_no": 1, "start_time": "11:00", ...}]}]}',
-            tool_call_id="call_get_slots_meera"
+            content='{"doctor_id": "D456", "doctor_name": "Dr. Meera Nair", "next_two_dates": [{"date": "2025-11-21", "weekday": "Friday", "slots": [{"token_no": 1, "start_time": "11:00", "end_time": "11:15", "status": "Available"}]}, {"date": "2025-11-22", "weekday": "Saturday", "slots": [{"token_no": 2, "start_time": "09:00", "end_time": "09:15", "status": "Available"}]}]}',
+            tool_call_id="call_get_slots_3"
         ),
-        AIMessage(content="Dr. Meera Nair is available on Friday, November 21st, with slots starting at 11:00 AM. Would you like to take that?"),
-        HumanMessage(content="Yes, please."),
+        AIMessage(content="Dr. Meera Nair is available on:\n- Friday, November 21st at 11:00 AM\n- Saturday, November 22nd at 9:00 AM\n\nWhich slot would you prefer?"),
+        HumanMessage(content="Friday at 11:00 AM works for me."),
         AIMessage(
             content="",
             tool_calls=[
                 ToolCall(
                     name="update_booking_appointment",
                     args={
-                        "booking_id": "B-2005",
+                        "booking_id": "205",
                         "new_doctor_name": "Dr. Meera Nair",
                         "doctor_specialty": "Dermatology",
                         "new_date": "2025-11-21",
                         "new_time_slot": "11:00",
-                        "mobile_number": mobile_number # Change this number with user's mobile_number while tool calling 
+                        "mobile_number": mobile_number
                     },
-                    id="call_update_tool"
+                    id="call_update_2"
                 )
             ]
         ),
         ToolMessage(
             content='"User need to press Confirm Update button to finalise the updation in booking.After that User should revisit booking details."',
-            tool_call_id="call_update_tool"
+            tool_call_id="call_update_2"
         ),
-        AIMessage(content="Okay, I've prepared the update. Your original appointment with Dr. Joshi will be changed to Dr. Meera Nair on November 21st at 11:00 AM. Please check your WhatsApp and press the 'Confirm Update' button to finalize this change.")
-        ])
-    return few_shot_examples
-#     [
-#     HumanMessage(content="Tell me about the cafeteria services."),
-#     AIMessage(
-#         content="",
-#         tool_calls=[
-#             ToolCall(
-#                 name="RAG_based_question_answer",
-#                 args={"query": "cafeteria services and hours","mobile_number":"91800045480"},
-#                 id="tool_call_rag_2"
-#             )
-#         ]
-#     ),
-#     ToolMessage(
-#         content='{"data": "The main cafeteria is on Floor 2, open 7 AM - 7 PM. A cafe is in the lobby, open 24/7.", "source": "visitor_guide.pdf"}',
-#         tool_call_id="tool_call_rag_2"
-#     ),
-    
-#     # --- Example 2: Slot Tool ---
-#     HumanMessage(content="Are there any appointments for Dr. XYZ who is a ABC specialist next week?"),
-#     AIMessage(
-#         content="",
-#         tool_calls=[
-#             ToolCall(
-#                 name="get_next_two_available_days_and_slot",
-#                 args={"doctor_name": "Dr. XYZ","specialty":"ABC"},
-#                 id="tool_call_slot_1"
-#             )
-#         ]
-#     ),
-#     ToolMessage(
-#         content='{"doctor": "Dr. XYZ", "availability": {"2025-11-04": ["10:00 AM"], "2025-11-05": ["02:00 PM"]}}',
-#         tool_call_id="tool_call_slot_1"
-#     ),
+        AIMessage(content="Excellent! I've updated your appointment (Booking ID: 205) from Dr. Rohan Joshi to Dr. Meera Nair on Friday, November 21, 2025, at 11:00 AM. Please check your WhatsApp and click the 'Confirm Update' button to finalize this change.")
+    ])
 
-#     # --- Example 3: Confirmation Tool ---
-#     HumanMessage(content="Hi, I need to cancel my appointment. The ID is B-12345."),
-#     AIMessage(
-#         content="",
-#         tool_calls=[
-#             ToolCall(
-#                 name="confirmation_status_tool",
-#                 args={"operation": "cancel", "booking_id": "B-12345"},
-#                 id="tool_call_confirm_1"
-#             )
-#         ]
-#     ),
-#     ToolMessage(
-#         content='{"status": "Booking B-12345 has been successfully cancelled."}',
-#         tool_call_id="tool_call_confirm_1"
-#     )
-# ]
+    return few_shot_examples
 
 
 class ChatManager:
@@ -311,8 +377,6 @@ class ChatManager:
         """
         self.agent = agent
         self.history = history_manager
-
-
         logger.info("ChatManager initialized with agent and history manager")
 
     def _build_chat_context(self, mobile_number: str) -> List[BaseMessage]:
@@ -421,4 +485,3 @@ class ChatManager:
         except Exception as e:
             logger.error(f"Error during agent invocation: {e}", exc_info=True)
             return "Sorry, I encountered an error. Please try again or contact support if the issue persists."
-
