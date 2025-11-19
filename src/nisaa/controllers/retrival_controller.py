@@ -24,7 +24,7 @@ LLM_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX", "nisaa-knowledge")
 
 # Optimized defaults
-TOP_K = int(os.getenv("TOP_K", "10"))
+TOP_K = int(os.getenv("TOP_K", "15"))
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.55"))
 
 try:
