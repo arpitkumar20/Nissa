@@ -9,28 +9,30 @@ logger = logging.getLogger(__name__)
 def get_rag_engine(namespace: str) -> HybridRAGQueryEngine:
     """
     FIX: Create a NEW RAG engine instance for each request
-    
+
     This eliminates:
     - Race conditions between concurrent requests
     - Namespace mixing between different companies
     - Singleton-related bugs
-    
+
     Args:
         namespace: Company-specific namespace from state
-        
+
     Returns:
         Fresh HybridRAGQueryEngine instance
     """
     if not namespace:
         raise ValueError("Namespace is required for RAG engine")
-    
+
     return HybridRAGQueryEngine(
         namespace=namespace,
-        top_k=5,
+        top_k=15,  # CHANGED: Increased from 5 to 15
         similarity_threshold=0.65,
         temperature=0.7,
-        max_tokens=2000
+        max_tokens=2000,
+        use_reranker=True,  # NEW: Enable reranker for better accuracy
     )
+
 
 def detect_id_or_phone(state: GraphState) -> GraphState:
     """
@@ -42,7 +44,7 @@ def detect_id_or_phone(state: GraphState) -> GraphState:
 
         query = state["user_query"]
         namespace = state["company_namespace"]
-        
+
         rag_engine = get_rag_engine(namespace)
         id_info = rag_engine.detect_id_in_query(query)
 
@@ -57,6 +59,7 @@ def detect_id_or_phone(state: GraphState) -> GraphState:
         logger.error(f"Error detecting ID/phone: {e}")
         return {**state, "is_id_query": False, "id_type": None, "id_value": None}
 
+
 def generate_embedding(state: GraphState) -> GraphState:
     """
     Generate embedding for the user query
@@ -67,7 +70,7 @@ def generate_embedding(state: GraphState) -> GraphState:
 
         query = state["user_query"]
         namespace = state["company_namespace"]
-        
+
         rag_engine = get_rag_engine(namespace)
         embedding = rag_engine.embeddings.embed_query(query)
 
@@ -79,11 +82,13 @@ def generate_embedding(state: GraphState) -> GraphState:
         logger.error(f"Error generating embedding: {e}")
         return {**state, "query_embedding": None}
 
+
 def retrieve_documents(state: GraphState) -> GraphState:
     """
-    Retrieve documents using hybrid search
+    Retrieve documents using hybrid search with reranking
     - Exact match for ID/phone queries
     - Semantic search for natural language
+    - Reranks results for better accuracy
     """
     try:
         log_state(state, "RETRIEVE_DOCUMENTS")
@@ -92,14 +97,15 @@ def retrieve_documents(state: GraphState) -> GraphState:
         rag_engine = get_rag_engine(namespace)
         query = state["user_query"]
 
-        docs, search_type = rag_engine.hybrid_retrieve(query, top_k=5)
+        # top_k is now 15 with reranking enabled
+        docs, search_type = rag_engine.hybrid_retrieve(query, top_k=15)
 
         doc_list = []
         for doc in docs:
             doc_dict = {"content": doc.page_content, "metadata": doc.metadata}
             doc_list.append(doc_dict)
 
-        logger.info(f"Retrieved {len(docs)} documents using {search_type}")
+        logger.info(f"Retrieved {len(docs)} documents using {search_type} (reranked)")
 
         return {
             **state,
@@ -117,6 +123,7 @@ def retrieve_documents(state: GraphState) -> GraphState:
             "num_documents": 0,
             "error": str(e),
         }
+
 
 def format_context(state: GraphState) -> GraphState:
     """
@@ -171,6 +178,7 @@ def format_context(state: GraphState) -> GraphState:
             "error": str(e),
         }
 
+
 def generate_response(state: GraphState) -> GraphState:
     """
     IMPROVED: Generate response WITHOUT history first
@@ -200,7 +208,7 @@ def generate_response(state: GraphState) -> GraphState:
 
         llm_messages = [
             SystemMessage(content=system_message.format(context=context)),
-            HumanMessage(content=query)
+            HumanMessage(content=query),
         ]
 
         response = rag_engine.llm.invoke(llm_messages)
