@@ -327,14 +327,17 @@ def get_bookings_details(mobile_number: str):
         string_bytes = composite_string.encode('utf-8')
         encoded_bytes = base64.urlsafe_b64encode(string_bytes)
         encoded_string = encoded_bytes.decode('utf-8')
-        booking_url = f'wati/booking/update?phone={encoded_string}'
-    
-        send_whatsapp_template_message(
+        
+        booking_url = f'wati/booking/cancel?phone={encoded_string}'
+        booking_url1 = f'wati/booking/update?phone={encoded_string}'
+        
+        send_whatsapp_template_booking(
             whatsapp_number=mobile_number,
             template_name=update_template, 
             broadcast_name=update_broadcast_name, 
             body_value=booking_details, 
-            url_value=booking_url
+            url_value=booking_url,
+            url1_value=booking_url1
         )
 
 
@@ -465,6 +468,56 @@ def send_whatsapp_template_message(
         logger.error(f"Exception occurred while sending template message: {e}")
         return {"error": str(e)}
 
+
+def send_whatsapp_template_booking(
+    whatsapp_number: str,
+    template_name: str,
+    broadcast_name: str,
+    body_value = str,
+    url_value= str,
+    url1_value = str
+
+) -> dict:
+
+    url = f"{WATI_BASE_URL}/{WATI_TENANT_ID}/api/v1/sendTemplateMessage?whatsappNumber={whatsapp_number}"
+
+    payload = json.dumps({
+    "template_name": f"{template_name}",
+    "broadcast_name": f"{broadcast_name}",
+    "parameters": [
+        {
+        "name": "body",
+        "value": body_value
+        },
+        {
+        "name": "url",
+        "value": url_value
+        },
+        {
+        "name": "url_1",
+        "value": url1_value
+        }
+    ],
+    "WATI_CHANNEL_NUMBER": WATI_CHANNEL_NUMBER
+    })
+    headers = {
+    'accept': '*/*',
+    'Authorization': f'Bearer {WATI_API_KEY}',
+    'Content-Type': 'application/json-patch+json'
+    }
+
+    logger.info(f"Sending WhatsApp template message to processing {whatsapp_number}")
+    try:
+        response = requests.post(url, headers=headers, data=payload)
+        if response.status_code == 200:
+            logger.info("Template message sent successfully")
+            return response.json()
+        else:
+            logger.error(f"Failed to send template message. Status code: {response.status_code}, Response: {response.json()}")
+            return {"error": f"Status code {response.status_code}", "response": response.json()}
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Exception occurred while sending template message: {e}")
+        return {"error": str(e)}
 
 
 
