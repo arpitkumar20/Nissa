@@ -42,7 +42,7 @@ class PostgresChatHistory:
         except Exception as e:
            logger.error(f"Error occured while creating chat history Table {e}.")        
 
-    def get_history(self, mobile_number: str, limit: int = 20) -> list[BaseMessage]:
+    def get_history(self, mobile_number: str, limit: int = 15) -> list[BaseMessage]:
         """
         Retrieves the last N messages as LangChain message objects.
 

@@ -43,7 +43,7 @@ def send_whatsapp_message_v2(phone_number: str, message: str) -> dict:
             logger.info(f"Message sent successfully")
             return response.json()
         else:
-            logger.error(f"Failed to send message. Status code: {response.status_code}, Response: {response.text}")
+            logger.error(f"Failed to send message. Status code: {response.status_code}, Response: {response.json()}")
             return {"error": f"Status code {response.status_code}", "response": response.text}
     except requests.exceptions.RequestException as e:
         logger.exception(f"Exception occurred while sending message : {e}")
