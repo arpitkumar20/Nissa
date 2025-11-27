@@ -1,5 +1,6 @@
 """
-SQL Database ingestion - WITH TABLE-LEVEL SUPPORT
+PRODUCTION-READY: SQL Database Ingestion with Stable Row Ordering
+Ensures consistent row order across multiple runs
 """
 
 from typing import List, Dict, Any
@@ -11,33 +12,21 @@ from sqlalchemy.engine.url import make_url
 from tqdm import tqdm
 from src.nisaa.config.logger import logger
 
-# Get all tables with metadata from a database
+
 def get_database_tables(db_uri: str) -> List[Dict[str, Any]]:
     """
     Get all tables with metadata from a database
-
-    Args:
-        db_uri: Database connection string
-
-    Returns:
-        List of dicts with table_name and row_count
-
-    Example:
-        [
-            {"table_name": "users", "row_count": 1000},
-            {"table_name": "orders", "row_count": 5000}
-        ]
+    
+    Returns tables sorted alphabetically for consistency
     """
     try:
         engine = create_engine(db_uri)
         inspector = inspect(engine)
 
-        # Parse URI to get database name and dialect
         url = make_url(db_uri)
         dialect = url.get_backend_name()
         db_name = url.database
 
-        # Get valid schemas
         if dialect == "mysql":
             schemas = [db_name]
         else:
@@ -50,11 +39,10 @@ def get_database_tables(db_uri: str) -> List[Dict[str, Any]]:
         tables_info = []
 
         with engine.connect() as conn:
-            for schema in schemas:
-                table_names = inspector.get_table_names(schema=schema)
+            for schema in sorted(schemas):  # Sort schemas for consistency
+                table_names = sorted(inspector.get_table_names(schema=schema))  # Sort tables
 
                 for table in table_names:
-                    # Get row count
                     try:
                         full_table_name = (
                             f"{schema}.{table}"
@@ -98,7 +86,14 @@ def get_database_tables(db_uri: str) -> List[Dict[str, Any]]:
 
 
 class SQLDatabaseIngester:
-    """Handles SQL database ingestion with progress tracking"""
+    """
+    FIXED: SQL database ingestion with STABLE row ordering
+    
+    Key Features:
+    - Always orders query results by primary key or first column
+    - Ensures consistent row order across multiple runs
+    - Prevents document ordering changes that break checkpoints
+    """
 
     def __init__(self, company_namespace: str):
         self.company_namespace = company_namespace
@@ -122,19 +117,64 @@ class SQLDatabaseIngester:
         }
 
     def get_valid_schemas(self, engine, dialect: str, db_name: str) -> List[str]:
-        """Get valid schemas from database"""
+        """Get valid schemas from database, sorted for consistency"""
         inspector = inspect(engine)
         if dialect == "mysql":
             return [db_name]
-        return [
+        
+        schemas = [
             s
             for s in inspector.get_schema_names()
             if s not in ("pg_catalog", "information_schema")
         ]
+        return sorted(schemas)  # Sort for consistency
 
     def get_all_tables(self, inspector, schema: str) -> List[str]:
-        """Get all tables from schema"""
-        return inspector.get_table_names(schema=schema)
+        """Get all tables from schema, sorted for consistency"""
+        return sorted(inspector.get_table_names(schema=schema))
+
+    def get_order_by_clause(
+        self,
+        inspector,
+        table_name: str,
+        schema: str,
+        dialect: str
+    ) -> str:
+        """
+        CRITICAL: Determine ORDER BY clause for stable row ordering
+        
+        Priority:
+        1. Primary key columns (if exist)
+        2. First column (fallback)
+        3. No ORDER BY (last resort - logs warning)
+        """
+        try:
+            # Try to get primary key
+            pk_constraint = inspector.get_pk_constraint(table_name, schema=schema)
+            pk_columns = pk_constraint.get('constrained_columns', [])
+            
+            if pk_columns:
+                order_by = ', '.join(pk_columns)
+                logger.debug(f"Using PRIMARY KEY for ORDER BY: {order_by}")
+                return order_by
+            
+            # Fallback: use first column
+            columns = inspector.get_columns(table_name, schema=schema)
+            if columns:
+                first_col = columns[0]['name']
+                logger.debug(f"Using first column for ORDER BY: {first_col}")
+                return first_col
+            
+            # Last resort: no ORDER BY
+            logger.warning(
+                f"⚠️ No PRIMARY KEY or columns found for {table_name}. "
+                f"Row order may be non-deterministic!"
+            )
+            return None
+            
+        except Exception as e:
+            logger.warning(f"Failed to determine ORDER BY for {table_name}: {e}")
+            return None
 
     def load_table_data(
         self,
@@ -167,14 +207,12 @@ class SQLDatabaseIngester:
         self, db_uri: str, table_names: List[str]
     ) -> List[Document]:
         """
-        NEW: Ingest only specific tables from a database
-
-        Args:
-            db_uri: Database connection string
-            table_names: List of table names to process (simple names, not full paths)
-
-        Returns:
-            List of Document objects from specified tables
+        FIXED: Ingest specific tables with STABLE row ordering
+        
+        Key Changes:
+        - Processes tables in sorted order
+        - Adds ORDER BY clause to all queries
+        - Ensures consistent document order across runs
         """
         try:
             metadata = self.parse_uri(db_uri)
@@ -190,7 +228,7 @@ class SQLDatabaseIngester:
             db = SQLDatabase(engine)
             all_docs = []
 
-            # Build a map of table name -> full table info
+            # Build table map
             table_map = {}
             for schema in schemas:
                 tables = self.get_all_tables(inspector, schema)
@@ -204,8 +242,8 @@ class SQLDatabaseIngester:
                         ),
                     }
 
-            # Process only the requested tables
-            for table_name in table_names:
+            # CRITICAL: Process tables in SORTED order
+            for table_name in sorted(table_names):
                 if table_name not in table_map:
                     logger.warning(f"Table '{table_name}' not found in database")
                     continue
@@ -214,11 +252,25 @@ class SQLDatabaseIngester:
                 schema = table_info["schema"]
                 full_name = table_info["full_name"]
 
-                query = f"SELECT * FROM {full_name};"
+                # CRITICAL: Get ORDER BY clause for stable ordering
+                order_by = self.get_order_by_clause(
+                    inspector, table_name, schema, dialect
+                )
+
+                if order_by:
+                    query = f"SELECT * FROM {full_name} ORDER BY {order_by};"
+                    logger.info(f"Loading {full_name} (ordered by: {order_by})")
+                else:
+                    query = f"SELECT * FROM {full_name};"
+                    logger.warning(
+                        f"⚠️ Loading {full_name} WITHOUT ORDER BY - "
+                        f"row order may be non-deterministic!"
+                    )
+
                 docs = self.load_table_data(db, query, metadata, schema, table_name)
                 all_docs.extend(docs)
 
-                logger.info(f"Loaded {len(docs)} documents from {full_name}")
+                logger.info(f"✓ Loaded {len(docs)} documents from {full_name}")
 
             self.stats["total_tables"] += len(table_names)
             self.stats["total_databases"] += 1
@@ -231,7 +283,9 @@ class SQLDatabaseIngester:
             return []
 
     def ingest_database(self, uri: str, pbar: tqdm = None) -> List[Document]:
-        """Ingest all data from a database"""
+        """
+        FIXED: Ingest all data from a database with STABLE ordering
+        """
         try:
             metadata = self.parse_uri(uri)
             engine = create_engine(uri)
@@ -256,17 +310,32 @@ class SQLDatabaseIngester:
                 leave=False,
                 bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} tables",
             ) as table_pbar:
+                # Process schemas in sorted order
                 for schema in schemas:
                     tables = self.get_all_tables(inspector, schema)
                     self.stats["total_tables"] += len(tables)
 
+                    # Process tables in sorted order
                     for table in tables:
                         full_table_name = (
                             f"{schema}.{table}"
                             if dialect != "mysql" and schema != "public"
                             else table
                         )
-                        query = f"SELECT * FROM {full_table_name};"
+                        
+                        # Get ORDER BY clause
+                        order_by = self.get_order_by_clause(
+                            inspector, table, schema, dialect
+                        )
+                        
+                        if order_by:
+                            query = f"SELECT * FROM {full_table_name} ORDER BY {order_by};"
+                        else:
+                            query = f"SELECT * FROM {full_table_name};"
+                            logger.warning(
+                                f"⚠️ {full_table_name} loaded without ORDER BY"
+                            )
+                        
                         docs = self.load_table_data(db, query, metadata, schema, table)
                         all_docs.extend(docs)
                         table_pbar.update(1)

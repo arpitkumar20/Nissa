@@ -595,7 +595,12 @@ class JobManager:
     
     
     def get_latest_interruptible_job(self, company_name: str) -> Optional[Dict]:
-        """Get the latest job with verified checkpoints, regardless of status"""
+        """
+        FIXED: Get the latest job with verified checkpoints
+        
+        Key fix: Trust checkpoints from ANY source (file OR database)
+        Don't re-verify file existence - CheckpointManager already did that
+        """
         conn = None
         try:
             conn = self.pool.getconn()
@@ -611,31 +616,41 @@ class JobManager:
                 
                 rows = cur.fetchall()
                 if not rows:
+                    logger.info(f"No jobs found for {company_name}")
                     return None
                 
                 from nisaa.services.checkpoint_manager import CheckpointManager
                 checkpoint_manager = CheckpointManager(self.pool)
                 
+                # Check each recent job for valid checkpoints
                 for row in rows:
                     job_id = row[0]
                     job_status = row[1]
                     
+                    # Skip completed jobs
+                    if job_status == JobStatus.COMPLETED:
+                        logger.debug(f"Skipping completed job {job_id}")
+                        continue
+                    
+                    # Get checkpoints (from file OR database)
+                    # CheckpointManager.get_all_checkpoints() already checks both sources
                     checkpoints = checkpoint_manager.get_all_checkpoints(job_id)
+                    
                     if not checkpoints:
+                        logger.debug(f"Job {job_id} has no checkpoints")
                         continue
                     
-                    checkpoint_file = checkpoint_manager.checkpoint_dir / f"{job_id}_pipeline_state.json"
-                    data_file = checkpoint_manager.checkpoint_dir / f"{job_id}_pipeline_state_data.json"
-                    
-                    if not (checkpoint_file.exists() and data_file.exists()):
-                        checkpoint_manager.clear_checkpoint(job_id, 'pipeline_state')
-                        continue
+                    # ✅ TRUST THE CHECKPOINTS
+                    # If get_all_checkpoints() returned them, they're valid
+                    # No need to re-verify file existence
+                    valid_checkpoints = list(checkpoints.keys())
                     
                     logger.info(
-                        f"Found resumable job: {job_id} (status: {job_status}, "
-                        f"checkpoints: {list(checkpoints.keys())})"
+                        f"✓ Found resumable job: {job_id} (status: {job_status}, "
+                        f"checkpoints: {valid_checkpoints})"
                     )
                     
+                    # Update job status to PENDING for resume
                     cur.execute("""
                         UPDATE ingestion_jobs 
                         SET status = %s, 
@@ -650,7 +665,8 @@ class JobManager:
                         'job_id': job_id,
                         'status': JobStatus.PENDING,
                         'created_at': row[3].isoformat() if row[3] else None,
-                        'resumed': True
+                        'resumed': True,
+                        'checkpoints': valid_checkpoints
                     }
                 
                 logger.info(f"No resumable jobs found for {company_name}")
